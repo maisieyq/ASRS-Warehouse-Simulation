@@ -395,12 +395,249 @@ def style_figure(fig, height: int) -> go.Figure:
     """Apply consistent readable chart styling."""
     fig.update_layout(
         **PLOTLY_LAYOUT,
+        title=None,
         height=height,
         margin=dict(l=12, r=12, t=18, b=12),
         legend_title_text="",
         hoverlabel=dict(font_size=13),
     )
     return fig
+
+def create_warehouse_layout(tasks: list[dict]) -> go.Figure:
+    """Create a schematic warehouse layout with task demand by rack."""
+
+    # Rack coordinates: four columns and three rows.
+    rack_positions = {
+        "A1": (1, 3),
+        "A2": (1, 2),
+        "A3": (1, 1),
+        "B1": (3, 3),
+        "B2": (3, 2),
+        "B3": (3, 1),
+        "C1": (5, 3),
+        "C2": (5, 2),
+        "C3": (5, 1),
+        "D1": (7, 3),
+        "D2": (7, 2),
+        "D3": (7, 1),
+    }
+
+    tasks_df = pd.DataFrame(tasks)
+
+    if tasks_df.empty:
+        task_counts = {}
+        storage_counts = {}
+        retrieval_counts = {}
+    else:
+        task_counts = tasks_df["rack_name"].value_counts().to_dict()
+
+        storage_counts = (
+            tasks_df[tasks_df["task_type"].str.lower() == "storage"]
+            ["rack_name"]
+            .value_counts()
+            .to_dict()
+        )
+
+        retrieval_counts = (
+            tasks_df[tasks_df["task_type"].str.lower() == "retrieval"]
+            ["rack_name"]
+            .value_counts()
+            .to_dict()
+        )
+
+    rack_names = list(rack_positions.keys())
+    rack_x = [rack_positions[rack][0] for rack in rack_names]
+    rack_y = [rack_positions[rack][1] for rack in rack_names]
+
+    total_tasks = [task_counts.get(rack, 0) for rack in rack_names]
+
+    hover_text = [
+        (
+            f"<b>{rack}</b><br>"
+            f"Total tasks: {task_counts.get(rack, 0)}<br>"
+            f"Storage: {storage_counts.get(rack, 0)}<br>"
+            f"Retrieval: {retrieval_counts.get(rack, 0)}"
+        )
+        for rack in rack_names
+    ]
+
+    figure = go.Figure()
+
+    # Warehouse aisles
+    for aisle_x in [2, 4, 6]:
+        figure.add_shape(
+            type="line",
+            x0=aisle_x,
+            x1=aisle_x,
+            y0=0.55,
+            y1=3.45,
+            line=dict(
+                color="#b9c7d6",
+                width=2,
+                dash="dot",
+            ),
+            layer="below",
+        )
+
+        figure.add_annotation(
+            x=aisle_x,
+            y=0.42,
+            text="Aisle",
+            showarrow=False,
+            font=dict(
+                size=10,
+                color="#68778c",
+            ),
+        )
+
+    # Rack blocks
+    figure.add_trace(
+        go.Scatter(
+            x=rack_x,
+            y=rack_y,
+            mode="markers+text",
+            text=[
+                f"{rack}<br>{task_counts.get(rack, 0)} tasks"
+                for rack in rack_names
+            ],
+            textposition="middle center",
+            hovertext=hover_text,
+            hoverinfo="text",
+            marker=dict(
+                symbol="square",
+                size=58,
+                color=total_tasks,
+                colorscale="Blues",
+                showscale=True,
+                colorbar=dict(
+                    title="Tasks",
+                    thickness=14,
+                    len=0.65,
+                ),
+                line=dict(
+                    color="#35516f",
+                    width=1.5,
+                ),
+            ),
+            textfont=dict(
+                color="#10243d",
+                size=10,
+            ),
+            name="Racks",
+        )
+    )
+
+    # Input station
+    figure.add_trace(
+        go.Scatter(
+            x=[0],
+            y=[0],
+            mode="markers+text",
+            text=["INPUT"],
+            textposition="middle center",
+            marker=dict(
+                symbol="square",
+                size=52,
+                color="#8bd17c",
+                line=dict(color="#367a31", width=1.5),
+            ),
+            textfont=dict(color="#173b16", size=10),
+            hovertemplate="<b>Input station</b><extra></extra>",
+            name="Input",
+        )
+    )
+
+    # Output station
+    figure.add_trace(
+        go.Scatter(
+            x=[8],
+            y=[0],
+            mode="markers+text",
+            text=["OUTPUT"],
+            textposition="middle center",
+            marker=dict(
+                symbol="square",
+                size=52,
+                color="#f4a261",
+                line=dict(color="#9b4f18", width=1.5),
+            ),
+            textfont=dict(color="#4c270b", size=10),
+            hovertemplate="<b>Output station</b><extra></extra>",
+            name="Output",
+        )
+    )
+
+    # Robot starting area
+    robot_count = int(selected_scenario["number_of_robots"])
+
+    robot_x = [
+        1.5 + index * 0.65
+        for index in range(robot_count)
+    ]
+
+    robot_y = [0 for _ in range(robot_count)]
+
+    figure.add_trace(
+        go.Scatter(
+            x=robot_x,
+            y=robot_y,
+            mode="markers+text",
+            text=[
+                f"R{index + 1}"
+                for index in range(robot_count)
+            ],
+            textposition="top center",
+            marker=dict(
+                size=17,
+                color="#6f42c1",
+                line=dict(color="#432477", width=1.5),
+            ),
+            hovertemplate=(
+                "<b>Robot %{text}</b><br>"
+                "Starting area"
+                "<extra></extra>"
+            ),
+            name="Robots",
+        )
+    )
+
+    figure.update_layout(
+        title=dict(text=""),
+        height=430,
+        margin=dict(l=20, r=20, t=15, b=20),
+        template="plotly_white",
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        font=dict(color="#172033"),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.01,
+            xanchor="left",
+            x=0,
+        ),
+        xaxis=dict(
+            range=[-0.6, 8.6],
+            showgrid=True,
+            gridcolor="#edf1f6",
+            zeroline=False,
+            showticklabels=False,
+            title="Warehouse columns",
+        ),
+        yaxis=dict(
+            range=[-0.5, 3.65],
+            showgrid=True,
+            gridcolor="#edf1f6",
+            zeroline=False,
+            showticklabels=False,
+            title="Warehouse rows",
+            scaleanchor="x",
+            scaleratio=1,
+        ),
+    )
+
+    return figure
 
 
 def task_frame(result: dict, strategy_label: str) -> pd.DataFrame:
@@ -747,6 +984,109 @@ with tasks_tab:
 
 with robots_tab:
     st.dataframe(all_robots.round(2), use_container_width=True, hide_index=True)
+
+
+st.markdown(
+    '<div class="section-title">Warehouse layout and task demand</div>',
+    unsafe_allow_html=True,
+)
+
+layout_left, layout_right = st.columns([1.7, 1])
+
+with layout_left:
+    warehouse_figure = create_warehouse_layout(
+        selected_scenario["tasks"]
+    )
+
+    st.plotly_chart(
+        warehouse_figure,
+        use_container_width=True,
+        config={
+            "displayModeBar": False,
+            "displaylogo": False,
+        },
+    )
+
+with layout_right:
+    tasks_profile = pd.DataFrame(selected_scenario["tasks"])
+
+    storage_tasks = int(
+        tasks_profile["task_type"]
+        .str.lower()
+        .eq("storage")
+        .sum()
+    )
+
+    retrieval_tasks = int(
+        tasks_profile["task_type"]
+        .str.lower()
+        .eq("retrieval")
+        .sum()
+    )
+
+    busiest_rack = (
+        tasks_profile["rack_name"].value_counts().index[0]
+        if not tasks_profile.empty
+        else "N/A"
+    )
+
+    busiest_rack_tasks = (
+        int(tasks_profile["rack_name"].value_counts().iloc[0])
+        if not tasks_profile.empty
+        else 0
+    )
+
+    metric1, metric2 = st.columns(2)
+
+    metric1.metric(
+        "Warehouse racks",
+        len(VALID_RACKS),
+    )
+
+    metric2.metric(
+        "Active robots",
+        selected_scenario["number_of_robots"],
+    )
+
+    metric3, metric4 = st.columns(2)
+
+    metric3.metric(
+        "Storage tasks",
+        storage_tasks,
+    )
+
+    metric4.metric(
+        "Retrieval tasks",
+        retrieval_tasks,
+    )
+
+    st.markdown(
+        f"""
+        <div class="scenario-card">
+            <b>Busiest rack: {busiest_rack}</b><br>
+            {busiest_rack_tasks} task(s) assigned to this rack.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    rack_summary = (
+        tasks_profile.groupby(
+            ["rack_name", "task_type"]
+        )
+        .size()
+        .unstack(fill_value=0)
+        .reset_index()
+    )
+
+    st.dataframe(
+        rack_summary,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+
 
 st.markdown('<div class="section-title">Export results</div>', unsafe_allow_html=True)
 export1, export2, export3, _ = st.columns([1, 1, 1, 2])
