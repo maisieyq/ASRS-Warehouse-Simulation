@@ -3,6 +3,7 @@ import os
 import matplotlib.pyplot as plt
 
 from simulation import run_simulation
+from scenarios import list_scenarios, get_scenario
 
 
 # =========================================================
@@ -12,24 +13,26 @@ from simulation import run_simulation
 OUTPUT_FOLDER = "outputs"
 
 
-def create_output_folder():
+def create_output_folder(folder_path):
     os.makedirs(
-        OUTPUT_FOLDER,
+        folder_path,
         exist_ok=True,
     )
 
 
 # =========================================================
-# 2. RUN BOTH STRATEGIES
+# 2. RUN BOTH STRATEGIES FOR ONE SCENARIO
 # =========================================================
 
-def get_results():
+def get_results(scenario_name):
     fifo_result = run_simulation(
-        "FIFO"
+        "FIFO",
+        scenario_name,
     )
 
     deferred_result = run_simulation(
-        "DEFERRED"
+        "DEFERRED",
+        scenario_name,
     )
 
     return fifo_result, deferred_result
@@ -41,10 +44,11 @@ def get_results():
 
 def save_figure(
     figure,
+    folder_path,
     filename,
 ):
     filepath = os.path.join(
-        OUTPUT_FOLDER,
+        folder_path,
         filename,
     )
 
@@ -70,6 +74,7 @@ def save_figure(
 def create_main_metrics_graph(
     fifo_result,
     deferred_result,
+    folder_path,
 ):
     fifo = fifo_result["summary"]
     deferred = deferred_result["summary"]
@@ -126,7 +131,7 @@ def create_main_metrics_graph(
     )
 
     axis.set_title(
-        "FIFO vs Deferred Commitment: Core Metrics"
+        f"{fifo['scenario_name']}: Core Metrics"
     )
 
     axis.set_xlabel(
@@ -166,6 +171,7 @@ def create_main_metrics_graph(
 
     save_figure(
         figure,
+        folder_path,
         "core_metrics_comparison.png",
     )
 
@@ -177,6 +183,7 @@ def create_main_metrics_graph(
 def create_waiting_time_graph(
     fifo_result,
     deferred_result,
+    folder_path,
 ):
     fifo_tasks = sorted(
         fifo_result["tasks"],
@@ -210,7 +217,7 @@ def create_waiting_time_graph(
     bar_width = 0.35
 
     figure, axis = plt.subplots(
-        figsize=(10, 6)
+        figsize=(max(10, len(task_ids) * 0.8), 6)
     )
 
     fifo_bars = axis.bar(
@@ -234,7 +241,7 @@ def create_waiting_time_graph(
     )
 
     axis.set_title(
-        "Task Waiting Time Comparison"
+        f"{fifo_result['summary']['scenario_name']}: Task Waiting Time"
     )
 
     axis.set_xlabel(
@@ -274,6 +281,7 @@ def create_waiting_time_graph(
 
     save_figure(
         figure,
+        folder_path,
         "task_waiting_time.png",
     )
 
@@ -285,6 +293,7 @@ def create_waiting_time_graph(
 def create_completion_time_graph(
     fifo_result,
     deferred_result,
+    folder_path,
 ):
     fifo_tasks = sorted(
         fifo_result["tasks"],
@@ -318,7 +327,7 @@ def create_completion_time_graph(
     bar_width = 0.35
 
     figure, axis = plt.subplots(
-        figsize=(10, 6)
+        figsize=(max(10, len(task_ids) * 0.8), 6)
     )
 
     fifo_bars = axis.bar(
@@ -342,7 +351,7 @@ def create_completion_time_graph(
     )
 
     axis.set_title(
-        "Task Completion Time Comparison"
+        f"{fifo_result['summary']['scenario_name']}: Task Completion Time"
     )
 
     axis.set_xlabel(
@@ -382,6 +391,7 @@ def create_completion_time_graph(
 
     save_figure(
         figure,
+        folder_path,
         "task_completion_time.png",
     )
 
@@ -393,6 +403,7 @@ def create_completion_time_graph(
 def create_travel_distance_graph(
     fifo_result,
     deferred_result,
+    folder_path,
 ):
     fifo_tasks = sorted(
         fifo_result["tasks"],
@@ -426,7 +437,7 @@ def create_travel_distance_graph(
     bar_width = 0.35
 
     figure, axis = plt.subplots(
-        figsize=(10, 6)
+        figsize=(max(10, len(task_ids) * 0.8), 6)
     )
 
     fifo_bars = axis.bar(
@@ -450,7 +461,7 @@ def create_travel_distance_graph(
     )
 
     axis.set_title(
-        "Task Travel Distance Comparison"
+        f"{fifo_result['summary']['scenario_name']}: Task Travel Distance"
     )
 
     axis.set_xlabel(
@@ -490,6 +501,7 @@ def create_travel_distance_graph(
 
     save_figure(
         figure,
+        folder_path,
         "task_travel_distance.png",
     )
 
@@ -501,6 +513,7 @@ def create_travel_distance_graph(
 def create_queue_length_graph(
     fifo_result,
     deferred_result,
+    folder_path,
 ):
     fifo_history = (
         fifo_result["queue_history"]
@@ -551,7 +564,7 @@ def create_queue_length_graph(
     )
 
     axis.set_title(
-        "Queue Length Over Simulation Time"
+        f"{fifo_result['summary']['scenario_name']}: Queue Length Over Time"
     )
 
     axis.set_xlabel(
@@ -570,6 +583,7 @@ def create_queue_length_graph(
 
     save_figure(
         figure,
+        folder_path,
         "queue_length_over_time.png",
     )
 
@@ -581,6 +595,7 @@ def create_queue_length_graph(
 def create_robot_distance_graph(
     fifo_result,
     deferred_result,
+    folder_path,
 ):
     fifo_robots = sorted(
         fifo_result["robots"],
@@ -614,7 +629,7 @@ def create_robot_distance_graph(
     bar_width = 0.35
 
     figure, axis = plt.subplots(
-        figsize=(9, 6)
+        figsize=(max(9, len(robot_names) * 1.2), 6)
     )
 
     fifo_bars = axis.bar(
@@ -638,7 +653,7 @@ def create_robot_distance_graph(
     )
 
     axis.set_title(
-        "Total Travel Distance by Robot"
+        f"{fifo_result['summary']['scenario_name']}: Total Distance by Robot"
     )
 
     axis.set_xlabel(
@@ -678,6 +693,7 @@ def create_robot_distance_graph(
 
     save_figure(
         figure,
+        folder_path,
         "robot_total_distance.png",
     )
 
@@ -689,6 +705,7 @@ def create_robot_distance_graph(
 def create_robot_utilization_graph(
     fifo_result,
     deferred_result,
+    folder_path,
 ):
     fifo_robots = sorted(
         fifo_result["robots"],
@@ -738,7 +755,7 @@ def create_robot_utilization_graph(
     bar_width = 0.35
 
     figure, axis = plt.subplots(
-        figsize=(9, 6)
+        figsize=(max(9, len(robot_names) * 1.2), 6)
     )
 
     fifo_bars = axis.bar(
@@ -762,7 +779,7 @@ def create_robot_utilization_graph(
     )
 
     axis.set_title(
-        "Robot Utilization Comparison"
+        f"{fifo_result['summary']['scenario_name']}: Robot Utilization"
     )
 
     axis.set_xlabel(
@@ -807,17 +824,19 @@ def create_robot_utilization_graph(
 
     save_figure(
         figure,
+        folder_path,
         "robot_utilization.png",
     )
 
 
 # =========================================================
-# 11. TOTAL DISTANCE AND MAKESPAN
+# 11. OVERALL STRATEGY PERFORMANCE
 # =========================================================
 
 def create_total_performance_graph(
     fifo_result,
     deferred_result,
+    folder_path,
 ):
     fifo = fifo_result["summary"]
     deferred = deferred_result["summary"]
@@ -868,7 +887,7 @@ def create_total_performance_graph(
     )
 
     axis.set_title(
-        "Overall Strategy Performance"
+        f"{fifo_result['summary']['scenario_name']}: Overall Strategy Performance"
     )
 
     axis.set_xlabel(
@@ -908,64 +927,308 @@ def create_total_performance_graph(
 
     save_figure(
         figure,
+        folder_path,
         "overall_strategy_performance.png",
     )
 
 
 # =========================================================
-# 12. MAIN
+# 12. SCENARIO SUMMARY CHART
 # =========================================================
 
-def main():
-    create_output_folder()
+def create_scenario_summary_graph(all_results):
+    scenario_names = []
+    fifo_makespans = []
+    deferred_makespans = []
+    fifo_distances = []
+    deferred_distances = []
 
-    fifo_result, deferred_result = (
-        get_results()
+    for scenario_name, result_pair in all_results.items():
+        fifo_result, deferred_result = result_pair
+
+        scenario = get_scenario(scenario_name)
+
+        scenario_names.append(
+            scenario["name"].replace(" Scenario", "")
+        )
+
+        fifo_makespans.append(
+            fifo_result["summary"]["makespan"]
+        )
+
+        deferred_makespans.append(
+            deferred_result["summary"]["makespan"]
+        )
+
+        fifo_distances.append(
+            fifo_result["summary"]["total_distance"]
+        )
+
+        deferred_distances.append(
+            deferred_result["summary"]["total_distance"]
+        )
+
+    x_positions = range(
+        len(scenario_names)
+    )
+
+    bar_width = 0.35
+
+    comparison_folder = os.path.join(
+        OUTPUT_FOLDER,
+        "scenario_comparison",
+    )
+
+    create_output_folder(
+        comparison_folder
+    )
+
+    # Makespan comparison
+    figure, axis = plt.subplots(
+        figsize=(11, 6)
+    )
+
+    fifo_bars = axis.bar(
+        [
+            x - bar_width / 2
+            for x in x_positions
+        ],
+        fifo_makespans,
+        width=bar_width,
+        label="FIFO",
+    )
+
+    deferred_bars = axis.bar(
+        [
+            x + bar_width / 2
+            for x in x_positions
+        ],
+        deferred_makespans,
+        width=bar_width,
+        label="Deferred Commitment",
+    )
+
+    axis.set_title(
+        "Makespan Comparison Across Scenarios"
+    )
+
+    axis.set_xlabel(
+        "Scenario"
+    )
+
+    axis.set_ylabel(
+        "Makespan"
+    )
+
+    axis.set_xticks(
+        list(x_positions)
+    )
+
+    axis.set_xticklabels(
+        scenario_names,
+        rotation=15,
+        ha="right",
+    )
+
+    axis.legend()
+
+    axis.grid(
+        axis="y",
+        alpha=0.3,
+    )
+
+    axis.bar_label(
+        fifo_bars,
+        fmt="%.1f",
+        padding=3,
+    )
+
+    axis.bar_label(
+        deferred_bars,
+        fmt="%.1f",
+        padding=3,
+    )
+
+    save_figure(
+        figure,
+        comparison_folder,
+        "makespan_across_scenarios.png",
+    )
+
+    # Total distance comparison
+    figure, axis = plt.subplots(
+        figsize=(11, 6)
+    )
+
+    fifo_bars = axis.bar(
+        [
+            x - bar_width / 2
+            for x in x_positions
+        ],
+        fifo_distances,
+        width=bar_width,
+        label="FIFO",
+    )
+
+    deferred_bars = axis.bar(
+        [
+            x + bar_width / 2
+            for x in x_positions
+        ],
+        deferred_distances,
+        width=bar_width,
+        label="Deferred Commitment",
+    )
+
+    axis.set_title(
+        "Total Travel Distance Comparison Across Scenarios"
+    )
+
+    axis.set_xlabel(
+        "Scenario"
+    )
+
+    axis.set_ylabel(
+        "Total Travel Distance"
+    )
+
+    axis.set_xticks(
+        list(x_positions)
+    )
+
+    axis.set_xticklabels(
+        scenario_names,
+        rotation=15,
+        ha="right",
+    )
+
+    axis.legend()
+
+    axis.grid(
+        axis="y",
+        alpha=0.3,
+    )
+
+    axis.bar_label(
+        fifo_bars,
+        fmt="%.1f",
+        padding=3,
+    )
+
+    axis.bar_label(
+        deferred_bars,
+        fmt="%.1f",
+        padding=3,
+    )
+
+    save_figure(
+        figure,
+        comparison_folder,
+        "total_distance_across_scenarios.png",
+    )
+
+
+# =========================================================
+# 13. GENERATE ALL GRAPHS FOR ONE SCENARIO
+# =========================================================
+
+def generate_graphs_for_scenario(scenario_name):
+    scenario_folder = os.path.join(
+        OUTPUT_FOLDER,
+        scenario_name,
+    )
+
+    create_output_folder(
+        scenario_folder
+    )
+
+    fifo_result, deferred_result = get_results(
+        scenario_name
     )
 
     create_main_metrics_graph(
         fifo_result,
         deferred_result,
+        scenario_folder,
     )
 
     create_waiting_time_graph(
         fifo_result,
         deferred_result,
+        scenario_folder,
     )
 
     create_completion_time_graph(
         fifo_result,
         deferred_result,
+        scenario_folder,
     )
 
     create_travel_distance_graph(
         fifo_result,
         deferred_result,
+        scenario_folder,
     )
 
     create_queue_length_graph(
         fifo_result,
         deferred_result,
+        scenario_folder,
     )
 
     create_robot_distance_graph(
         fifo_result,
         deferred_result,
+        scenario_folder,
     )
 
     create_robot_utilization_graph(
         fifo_result,
         deferred_result,
+        scenario_folder,
     )
 
     create_total_performance_graph(
         fifo_result,
         deferred_result,
+        scenario_folder,
+    )
+
+    return fifo_result, deferred_result
+
+
+# =========================================================
+# 14. MAIN
+# =========================================================
+
+def main():
+    create_output_folder(
+        OUTPUT_FOLDER
+    )
+
+    all_results = {}
+
+    for scenario_name in list_scenarios():
+        print()
+        print("=" * 80)
+        print(
+            f"Generating graphs for scenario: {scenario_name}"
+        )
+        print("=" * 80)
+
+        all_results[scenario_name] = (
+            generate_graphs_for_scenario(
+                scenario_name
+            )
+        )
+
+    create_scenario_summary_graph(
+        all_results
     )
 
     print()
     print(
-        "All graphs were generated successfully."
+        "All scenario graphs were generated successfully."
     )
 
 

@@ -1,5 +1,5 @@
 import simpy
-
+from scenarios import get_scenario, list_scenarios
 
 # =========================================================
 # 1. WAREHOUSE CONFIGURATION
@@ -8,11 +8,35 @@ import simpy
 INPUT_STATION = (0, 0)
 OUTPUT_STATION = (8, 0)
 
-ROBOT_START_POSITIONS = {
-    1: (2, 0),
-    2: (4, 0),
-    3: (6, 0),
-}
+BASE_ROBOT_START_POINTS = [
+    (2, 0),
+    (4, 0),
+    (6, 0),
+]
+
+
+def generate_robot_start_positions(number_of_robots):
+    start_positions = {}
+
+    for robot_id in range(1, number_of_robots + 1):
+        base_index = (
+            robot_id - 1
+        ) % len(BASE_ROBOT_START_POINTS)
+
+        start_positions[robot_id] = (
+            BASE_ROBOT_START_POINTS[base_index]
+        )
+
+    return start_positions
+
+
+NUMBER_OF_ROBOTS = 3
+
+ROBOT_START_POSITIONS = (
+    generate_robot_start_positions(
+        NUMBER_OF_ROBOTS
+    )
+)
 
 RACK_POSITIONS = {
     "A1": (1, 6),
@@ -32,7 +56,36 @@ RACK_POSITIONS = {
     "D3": (7, 2),
 }
 
-NUMBER_OF_ROBOTS = 3
+# Half-width of a rack block, in grid units. Used only to keep the
+# access aisle from ever overlapping the rack it serves.
+RACK_HALF_WIDTH = 0.3
+
+# Distance from a rack's centre to the aisle point a robot stops at.
+# Smaller than the old value (1.0) so the robot visibly parks right
+# beside the rack instead of a whole grid cell away, while still
+# clearing the rack block (RACK_HALF_WIDTH = 0.3).
+ACCESS_OFFSET = 0.5
+
+# The y-coordinate of the main horizontal transit corridor. Input,
+# output, and every robot start point sit on this row. All
+# horizontal travel is routed through this row so a robot never
+# drives across a row of racks to change aisles.
+CORRIDOR_Y = 0
+
+
+def get_rack_access_position(rack_name):
+    """
+    The rack position is the visual rack centre.
+    The rack access position is where the robot stops beside the rack.
+    The robot does not move into the rack block itself.
+    """
+    rack_x, rack_y = RACK_POSITIONS[rack_name]
+
+    return (
+        rack_x - ACCESS_OFFSET,
+        rack_y,
+    )
+
 
 ROBOT_SPEED = 1.0
 
@@ -116,8 +169,13 @@ class Task:
         self.arrival_time = float(arrival_time)
 
         self.rack_name = rack_name
-        self.rack_position = (
-            RACK_POSITIONS[rack_name]
+
+        # Rack centre is used for drawing / display.
+        self.rack_position = RACK_POSITIONS[rack_name]
+
+        # Rack access position is used for robot travel.
+        self.rack_access_position = (
+            get_rack_access_position(rack_name)
         )
 
         self.start_time = None
@@ -158,10 +216,7 @@ class Robot:
         starting_position,
     ):
         self.robot_id = robot_id
-        self.starting_position = (
-            starting_position
-        )
-
+        self.starting_position = starting_position
         self.position = starting_position
 
         self.available = True
@@ -179,7 +234,7 @@ class Robot:
 
 
 # =========================================================
-# 5. DISTANCE FUNCTIONS
+# 5. DISTANCE AND ROUTING FUNCTIONS
 # =========================================================
 
 def manhattan_distance(
@@ -205,37 +260,120 @@ def travel_time(distance):
     )
 
 
+def route_waypoints(
+    start_position,
+    end_position,
+):
+    """
+    Build the sequence of points a robot passes through when moving
+    between two points on the aisle network.
+
+    Racks only ever sit beside an aisle, never on one, and the main
+    transit corridor runs along y = CORRIDOR_Y with no racks in it.
+    So a route that only ever changes x while y = CORRIDOR_Y, and
+    only ever changes y while x is fixed at a single aisle column,
+    can never cross a rack block:
+
+    - Same aisle column already -> travel straight up/down it.
+    - Starting or ending on the corridor -> one turn is enough.
+    - Otherwise (aisle to aisle) -> drop to the corridor, cross to
+      the target aisle column, then travel up/down it.
+    """
+    start_x, start_y = start_position
+    end_x, end_y = end_position
+
+    if start_x == end_x:
+        return [start_position, end_position]
+
+    if start_y == CORRIDOR_Y:
+        return [
+            start_position,
+            (end_x, CORRIDOR_Y),
+            end_position,
+        ]
+
+    if end_y == CORRIDOR_Y:
+        return [
+            start_position,
+            (start_x, CORRIDOR_Y),
+            end_position,
+        ]
+
+    return [
+        start_position,
+        (start_x, CORRIDOR_Y),
+        (end_x, CORRIDOR_Y),
+        end_position,
+    ]
+
+
+def route_distance(
+    start_position,
+    end_position,
+):
+    """
+    Total travel distance along the aisle-safe route between two
+    points, rather than a straight-line Manhattan shortcut that
+    could cut across a rack.
+    """
+    waypoints = route_waypoints(
+        start_position,
+        end_position,
+    )
+
+    total = 0.0
+
+    for point_a, point_b in zip(
+        waypoints,
+        waypoints[1:],
+    ):
+        total += manhattan_distance(
+            point_a,
+            point_b,
+        )
+
+    return total
+
+
 def estimate_route_distance(
     robot,
     task,
 ):
+    """
+    Estimate the full route distance before assignment.
+
+    Storage:
+    robot current position -> input station -> rack access point
+
+    Retrieval:
+    robot current position -> rack access point -> output station
+    """
     if task.task_type == "storage":
         return (
-            manhattan_distance(
+            route_distance(
                 robot.position,
                 INPUT_STATION,
             )
-            + manhattan_distance(
+            + route_distance(
                 INPUT_STATION,
-                task.rack_position,
+                task.rack_access_position,
             )
         )
 
     if task.task_type == "retrieval":
         return (
-            manhattan_distance(
+            route_distance(
                 robot.position,
-                task.rack_position,
+                task.rack_access_position,
             )
-            + manhattan_distance(
-                task.rack_position,
+            + route_distance(
+                task.rack_access_position,
                 OUTPUT_STATION,
             )
         )
 
     raise ValueError(
-        f"Invalid task type: "
-        f"{task.task_type}"
+        f"Invalid task type: {task.task_type}"
     )
 
 
@@ -243,16 +381,14 @@ def estimate_route_distance(
 # 6. TASK CREATION
 # =========================================================
 
-def create_tasks():
+def create_tasks(task_data):
     tasks = []
 
-    for data in TASK_DATA:
+    for data in task_data:
         task = Task(
             task_id=data["task_id"],
             task_type=data["task_type"],
-            arrival_time=data[
-                "arrival_time"
-            ],
+            arrival_time=data["arrival_time"],
             rack_name=data["rack_name"],
         )
 
@@ -331,15 +467,12 @@ def task_generator(
 
         if delay < 0:
             raise ValueError(
-                "Task arrival times "
-                "must not decrease."
+                "Task arrival times must not decrease."
             )
 
         yield env.timeout(delay)
 
-        previous_arrival = (
-            task.arrival_time
-        )
+        previous_arrival = task.arrival_time
 
         pending_tasks.append(task)
 
@@ -350,8 +483,12 @@ def task_generator(
             task_id=task.task_id,
             task_type=task.task_type,
             rack_name=task.rack_name,
-            status="Task arrived",
-            position=task.rack_position,
+            status=(
+                "Task arrived; "
+                f"rack centre {task.rack_position}; "
+                f"access point {task.rack_access_position}"
+            ),
+            position=task.rack_access_position,
         )
 
         signal_dispatcher(state)
@@ -396,8 +533,7 @@ def select_task(
 
     else:
         raise ValueError(
-            "Strategy must be FIFO "
-            "or DEFERRED."
+            "Strategy must be FIFO or DEFERRED."
         )
 
     selected_task.estimated_distance = (
@@ -434,9 +570,7 @@ def central_dispatcher(
                 )
             )
 
-            robot = (
-                available_robots.pop(0)
-            )
+            robot = available_robots.pop(0)
 
             task = select_task(
                 strategy,
@@ -450,9 +584,7 @@ def central_dispatcher(
             robot.current_task = task
 
             task.start_time = env.now
-            task.robot_id = (
-                robot.robot_id
-            )
+            task.robot_id = robot.robot_id
 
             record_event(
                 event_log=event_log,
@@ -465,36 +597,25 @@ def central_dispatcher(
                 status=(
                     "Task assigned; "
                     f"estimated distance "
-                    f"{task.estimated_distance:.1f}"
+                    f"{task.estimated_distance:.1f}; "
+                    f"rack access point "
+                    f"{task.rack_access_position}"
                 ),
                 position=robot.position,
             )
 
-            yield (
-                robot.assignment_store.put(
-                    task
-                )
-            )
+            yield robot.assignment_store.put(task)
 
-        current_event = (
-            state["dispatch_event"]
-        )
+        current_event = state["dispatch_event"]
 
         if current_event.triggered:
-            state["dispatch_event"] = (
-                env.event()
-            )
+            state["dispatch_event"] = env.event()
             continue
 
         yield current_event
 
-        if (
-            state["dispatch_event"]
-            is current_event
-        ):
-            state["dispatch_event"] = (
-                env.event()
-            )
+        if state["dispatch_event"] is current_event:
+            state["dispatch_event"] = env.event()
 
 
 # =========================================================
@@ -508,11 +629,9 @@ def perform_storage_task(
     task,
     event_log,
 ):
-    distance_to_input = (
-        manhattan_distance(
-            robot.position,
-            INPUT_STATION,
-        )
+    distance_to_input = route_distance(
+        robot.position,
+        INPUT_STATION,
     )
 
     record_event(
@@ -523,16 +642,12 @@ def perform_storage_task(
         task_id=task.task_id,
         task_type=task.task_type,
         rack_name=task.rack_name,
-        status=(
-            "Travelling to input station"
-        ),
+        status="Travelling to input station",
         position=robot.position,
     )
 
     yield env.timeout(
-        travel_time(
-            distance_to_input
-        )
+        travel_time(distance_to_input)
     )
 
     robot.position = INPUT_STATION
@@ -545,9 +660,7 @@ def perform_storage_task(
         task_id=task.task_id,
         task_type=task.task_type,
         rack_name=task.rack_name,
-        status=(
-            "Arrived at input station"
-        ),
+        status="Arrived at input station",
         position=robot.position,
     )
 
@@ -565,11 +678,9 @@ def perform_storage_task(
 
     yield env.timeout(LOAD_TIME)
 
-    distance_to_rack = (
-        manhattan_distance(
-            INPUT_STATION,
-            task.rack_position,
-        )
+    distance_to_rack_access = route_distance(
+        INPUT_STATION,
+        task.rack_access_position,
     )
 
     record_event(
@@ -581,21 +692,17 @@ def perform_storage_task(
         task_type=task.task_type,
         rack_name=task.rack_name,
         status=(
-            f"Travelling to Rack "
-            f"{task.rack_name}"
+            f"Travelling to Rack {task.rack_name} "
+            f"access point"
         ),
         position=robot.position,
     )
 
     yield env.timeout(
-        travel_time(
-            distance_to_rack
-        )
+        travel_time(distance_to_rack_access)
     )
 
-    robot.position = (
-        task.rack_position
-    )
+    robot.position = task.rack_access_position
 
     record_event(
         event_log=event_log,
@@ -606,8 +713,8 @@ def perform_storage_task(
         task_type=task.task_type,
         rack_name=task.rack_name,
         status=(
-            f"Storing item at Rack "
-            f"{task.rack_name}"
+            f"Storing item at Rack {task.rack_name} "
+            f"from access point"
         ),
         position=robot.position,
     )
@@ -616,7 +723,7 @@ def perform_storage_task(
 
     task.travel_distance = (
         distance_to_input
-        + distance_to_rack
+        + distance_to_rack_access
     )
 
 
@@ -631,11 +738,9 @@ def perform_retrieval_task(
     task,
     event_log,
 ):
-    distance_to_rack = (
-        manhattan_distance(
-            robot.position,
-            task.rack_position,
-        )
+    distance_to_rack_access = route_distance(
+        robot.position,
+        task.rack_access_position,
     )
 
     record_event(
@@ -647,21 +752,17 @@ def perform_retrieval_task(
         task_type=task.task_type,
         rack_name=task.rack_name,
         status=(
-            f"Travelling to Rack "
-            f"{task.rack_name}"
+            f"Travelling to Rack {task.rack_name} "
+            f"access point"
         ),
         position=robot.position,
     )
 
     yield env.timeout(
-        travel_time(
-            distance_to_rack
-        )
+        travel_time(distance_to_rack_access)
     )
 
-    robot.position = (
-        task.rack_position
-    )
+    robot.position = task.rack_access_position
 
     record_event(
         event_log=event_log,
@@ -672,19 +773,17 @@ def perform_retrieval_task(
         task_type=task.task_type,
         rack_name=task.rack_name,
         status=(
-            f"Retrieving item from Rack "
-            f"{task.rack_name}"
+            f"Retrieving item from Rack {task.rack_name} "
+            f"at access point"
         ),
         position=robot.position,
     )
 
     yield env.timeout(PICK_TIME)
 
-    distance_to_output = (
-        manhattan_distance(
-            task.rack_position,
-            OUTPUT_STATION,
-        )
+    distance_to_output = route_distance(
+        task.rack_access_position,
+        OUTPUT_STATION,
     )
 
     record_event(
@@ -695,16 +794,12 @@ def perform_retrieval_task(
         task_id=task.task_id,
         task_type=task.task_type,
         rack_name=task.rack_name,
-        status=(
-            "Travelling to output station"
-        ),
+        status="Travelling to output station",
         position=robot.position,
     )
 
     yield env.timeout(
-        travel_time(
-            distance_to_output
-        )
+        travel_time(distance_to_output)
     )
 
     robot.position = OUTPUT_STATION
@@ -724,7 +819,7 @@ def perform_retrieval_task(
     yield env.timeout(UNLOAD_TIME)
 
     task.travel_distance = (
-        distance_to_rack
+        distance_to_rack_access
         + distance_to_output
     )
 
@@ -745,9 +840,7 @@ def robot_worker(
     event_log,
 ):
     while True:
-        task = yield (
-            robot.assignment_store.get()
-        )
+        task = yield robot.assignment_store.get()
 
         busy_start = env.now
 
@@ -787,8 +880,7 @@ def robot_worker(
 
         else:
             raise ValueError(
-                f"Invalid task type: "
-                f"{task.task_type}"
+                f"Invalid task type: {task.task_type}"
             )
 
         task.completion_time = env.now
@@ -797,11 +889,9 @@ def robot_worker(
             env.now - busy_start
         )
 
-        robot.total_distance += (
-            task.travel_distance
-        )
-
+        robot.total_distance += task.travel_distance
         robot.completed_tasks += 1
+
         robot.available = True
         robot.available_since = env.now
         robot.current_task = None
@@ -840,8 +930,7 @@ def robot_worker(
 
         if (
             state["generation_finished"]
-            and len(completed_tasks)
-            == total_task_count
+            and len(completed_tasks) == total_task_count
             and not completion_event.triggered
         ):
             completion_event.succeed()
@@ -861,9 +950,7 @@ def queue_monitor(
         queue_history.append(
             {
                 "time": env.now,
-                "queue_length": len(
-                    pending_tasks
-                ),
+                "queue_length": len(pending_tasks),
             }
         )
 
@@ -881,9 +968,7 @@ def calculate_summary(
     makespan,
     queue_history,
 ):
-    task_count = len(
-        completed_tasks
-    )
+    task_count = len(completed_tasks)
 
     total_waiting = sum(
         task.waiting_time()
@@ -923,24 +1008,17 @@ def calculate_summary(
         "completed_tasks": task_count,
         "makespan": makespan,
         "average_waiting_time": (
-            total_waiting
-            / task_count
+            total_waiting / task_count
         ),
         "average_completion_time": (
-            total_cycle
-            / task_count
+            total_cycle / task_count
         ),
         "average_travel_distance": (
-            total_distance
-            / task_count
+            total_distance / task_count
         ),
         "total_distance": total_distance,
-        "average_queue_length": (
-            average_queue_length
-        ),
-        "maximum_queue_length": (
-            maximum_queue_length
-        ),
+        "average_queue_length": average_queue_length,
+        "maximum_queue_length": maximum_queue_length,
     }
 
 
@@ -948,12 +1026,33 @@ def calculate_summary(
 # 17. RUN ONE STRATEGY
 # =========================================================
 
-def run_simulation(strategy):
+def run_simulation(
+    strategy,
+    scenario_name="baseline",
+):
     strategy = strategy.upper()
+
+    scenario = get_scenario(
+        scenario_name
+    )
+
+    number_of_robots = scenario[
+        "number_of_robots"
+    ]
+
+    task_data = scenario["tasks"]
+
+    robot_start_positions = (
+        generate_robot_start_positions(
+            number_of_robots
+        )
+    )
 
     env = simpy.Environment()
 
-    tasks = create_tasks()
+    tasks = create_tasks(
+        task_data
+    )
 
     pending_tasks = []
     completed_tasks = []
@@ -965,24 +1064,20 @@ def run_simulation(strategy):
             env=env,
             robot_id=robot_id,
             starting_position=(
-                ROBOT_START_POSITIONS[
+                robot_start_positions[
                     robot_id
                 ]
             ),
         )
         for robot_id in range(
             1,
-            NUMBER_OF_ROBOTS + 1,
+            number_of_robots + 1,
         )
     ]
 
-    available_robots = (
-        robots.copy()
-    )
+    available_robots = robots.copy()
 
-    completion_event = (
-        env.event()
-    )
+    completion_event = env.event()
 
     state = {
         "generation_finished": False,
@@ -1005,9 +1100,7 @@ def run_simulation(strategy):
             env=env,
             strategy=strategy,
             pending_tasks=pending_tasks,
-            available_robots=(
-                available_robots
-            ),
+            available_robots=available_robots,
             state=state,
             event_log=event_log,
         )
@@ -1019,19 +1112,11 @@ def run_simulation(strategy):
                 env=env,
                 strategy=strategy,
                 robot=robot,
-                available_robots=(
-                    available_robots
-                ),
-                completed_tasks=(
-                    completed_tasks
-                ),
-                total_task_count=len(
-                    tasks
-                ),
+                available_robots=available_robots,
+                completed_tasks=completed_tasks,
+                total_task_count=len(tasks),
                 state=state,
-                completion_event=(
-                    completion_event
-                ),
+                completion_event=completion_event,
                 event_log=event_log,
             )
         )
@@ -1039,15 +1124,9 @@ def run_simulation(strategy):
     env.process(
         queue_monitor(
             env=env,
-            pending_tasks=(
-                pending_tasks
-            ),
-            queue_history=(
-                queue_history
-            ),
-            completion_event=(
-                completion_event
-            ),
+            pending_tasks=pending_tasks,
+            queue_history=queue_history,
+            completion_event=completion_event,
         )
     )
 
@@ -1057,22 +1136,26 @@ def run_simulation(strategy):
 
     summary = calculate_summary(
         strategy=strategy,
-        completed_tasks=(
-            completed_tasks
-        ),
+        completed_tasks=completed_tasks,
         robots=robots,
         makespan=env.now,
         queue_history=queue_history,
     )
 
+    summary["scenario"] = scenario_name
+    summary["scenario_name"] = scenario["name"]
+    summary["scenario_description"] = scenario[
+        "description"
+    ]
+
     return {
         "summary": summary,
         "tasks": completed_tasks,
         "robots": robots,
-        "queue_history": (
-            queue_history
-        ),
+        "queue_history": queue_history,
         "event_log": event_log,
+        "scenario": scenario,
+        "robot_start_positions": robot_start_positions,
     }
 
 
@@ -1081,16 +1164,14 @@ def run_simulation(strategy):
 # =========================================================
 
 def print_event_log(result):
-    strategy = result["summary"][
-        "strategy"
-    ]
+    strategy = result["summary"]["strategy"]
 
     print()
-    print("=" * 125)
+    print("=" * 135)
     print(
         f"{strategy} TASK AND ROBOT STATUS LOG"
     )
-    print("=" * 125)
+    print("=" * 135)
 
     print(
         f"{'Time':<8}"
@@ -1102,12 +1183,10 @@ def print_event_log(result):
         f"{'Status'}"
     )
 
-    print("-" * 125)
+    print("-" * 135)
 
     sorted_events = sorted(
-        enumerate(
-            result["event_log"]
-        ),
+        enumerate(result["event_log"]),
         key=lambda item: (
             item[1]["time"],
             item[0],
@@ -1117,36 +1196,31 @@ def print_event_log(result):
     for _, event in sorted_events:
         robot_text = (
             f"R{event['robot_id']}"
-            if event["robot_id"]
-            is not None
+            if event["robot_id"] is not None
             else "-"
         )
 
         task_text = (
             event["task_id"]
-            if event["task_id"]
-            is not None
+            if event["task_id"] is not None
             else "-"
         )
 
         type_text = (
             event["task_type"]
-            if event["task_type"]
-            is not None
+            if event["task_type"] is not None
             else "-"
         )
 
         rack_text = (
             event["rack_name"]
-            if event["rack_name"]
-            is not None
+            if event["rack_name"] is not None
             else "-"
         )
 
         position_text = (
             str(event["position"])
-            if event["position"]
-            is not None
+            if event["position"] is not None
             else "-"
         )
 
@@ -1194,37 +1268,23 @@ def print_comparison(
     deferred_result,
 ):
     fifo = fifo_result["summary"]
-    deferred = (
-        deferred_result["summary"]
-    )
+    deferred = deferred_result["summary"]
 
     rows = [
         (
             "Average waiting time",
-            fifo[
-                "average_waiting_time"
-            ],
-            deferred[
-                "average_waiting_time"
-            ],
+            fifo["average_waiting_time"],
+            deferred["average_waiting_time"],
         ),
         (
             "Average completion time",
-            fifo[
-                "average_completion_time"
-            ],
-            deferred[
-                "average_completion_time"
-            ],
+            fifo["average_completion_time"],
+            deferred["average_completion_time"],
         ),
         (
             "Average travel distance",
-            fifo[
-                "average_travel_distance"
-            ],
-            deferred[
-                "average_travel_distance"
-            ],
+            fifo["average_travel_distance"],
+            deferred["average_travel_distance"],
         ),
         (
             "Total travel distance",
@@ -1238,20 +1298,15 @@ def print_comparison(
         ),
         (
             "Average queue length",
-            fifo[
-                "average_queue_length"
-            ],
-            deferred[
-                "average_queue_length"
-            ],
+            fifo["average_queue_length"],
+            deferred["average_queue_length"],
         ),
     ]
 
     print()
     print("=" * 100)
     print(
-        "FIFO VS DEFERRED COMMITMENT "
-        "COMPARISON"
+        "FIFO VS DEFERRED COMMITMENT COMPARISON"
     )
     print("=" * 100)
 
@@ -1304,13 +1359,13 @@ def print_comparison(
     print("=" * 100)
 
     print(
-        "Positive change means Deferred "
-        "Commitment achieved a lower value."
+        "Positive change means Deferred Commitment "
+        "achieved a lower value."
     )
 
     print(
-        "Negative change means Deferred "
-        "Commitment produced a higher value."
+        "Negative change means Deferred Commitment "
+        "produced a higher value."
     )
 
 
@@ -1319,12 +1374,30 @@ def print_comparison(
 # =========================================================
 
 def main():
+    scenario_name = "retrieval_dominant"
+
     fifo_result = run_simulation(
-        "FIFO"
+        "FIFO",
+        scenario_name,
     )
 
     deferred_result = run_simulation(
-        "DEFERRED"
+        "DEFERRED",
+        scenario_name,
+    )
+
+    print()
+    print("=" * 100)
+    print(
+        f"SCENARIO: "
+        f"{fifo_result['summary']['scenario_name']}"
+    )
+    print("=" * 100)
+
+    print(
+        fifo_result["summary"][
+            "scenario_description"
+        ]
     )
 
     print_event_log(
