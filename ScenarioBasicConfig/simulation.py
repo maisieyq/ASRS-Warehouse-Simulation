@@ -986,12 +986,20 @@ def calculate_summary(
 def run_simulation(
     strategy,
     scenario_name="baseline",
+    scenario_config=None,
 ):
     strategy = strategy.upper()
 
-    scenario = get_scenario(
-        scenario_name
-    )
+    if scenario_config is not None:
+        scenario = scenario_config
+        scenario_name = scenario_config.get(
+            "name",
+            scenario_name,
+        )
+    else:
+        scenario = get_scenario(
+            scenario_name
+        )
 
     number_of_robots = scenario[
         "number_of_robots"
