@@ -95,9 +95,52 @@ PICK_TIME = 2.0
 UNLOAD_TIME = 2.0
 
 
+# =========================================================
+# 2. DEFAULT TASK DATA
+# =========================================================
+
+TASK_DATA = [
+    {
+        "task_id": "T01",
+        "task_type": "storage",
+        "arrival_time": 0,
+        "rack_name": "A1",
+    },
+    {
+        "task_id": "T02",
+        "task_type": "retrieval",
+        "arrival_time": 2,
+        "rack_name": "D2",
+    },
+    {
+        "task_id": "T03",
+        "task_type": "storage",
+        "arrival_time": 4,
+        "rack_name": "B3",
+    },
+    {
+        "task_id": "T04",
+        "task_type": "retrieval",
+        "arrival_time": 6,
+        "rack_name": "A2",
+    },
+    {
+        "task_id": "T05",
+        "task_type": "storage",
+        "arrival_time": 8,
+        "rack_name": "C1",
+    },
+    {
+        "task_id": "T06",
+        "task_type": "retrieval",
+        "arrival_time": 10,
+        "rack_name": "D1",
+    },
+]
+
 
 # =========================================================
-# 2. TASK CLASS
+# 3. TASK CLASS
 # =========================================================
 
 class Task:
@@ -162,7 +205,7 @@ class Task:
 
 
 # =========================================================
-# 3. ROBOT CLASS
+# 4. ROBOT CLASS
 # =========================================================
 
 class Robot:
@@ -191,7 +234,7 @@ class Robot:
 
 
 # =========================================================
-# 4. DISTANCE AND ROUTING FUNCTIONS
+# 5. DISTANCE AND ROUTING FUNCTIONS
 # =========================================================
 
 def manhattan_distance(
@@ -335,7 +378,7 @@ def estimate_route_distance(
 
 
 # =========================================================
-# 5. TASK CREATION
+# 6. TASK CREATION
 # =========================================================
 
 def create_tasks(task_data):
@@ -355,7 +398,7 @@ def create_tasks(task_data):
 
 
 # =========================================================
-# 6. EVENT LOG
+# 7. EVENT LOG
 # =========================================================
 
 def record_event(
@@ -384,7 +427,7 @@ def record_event(
 
 
 # =========================================================
-# 7. DISPATCHER SIGNAL
+# 8. DISPATCHER SIGNAL
 # =========================================================
 
 def signal_dispatcher(state):
@@ -395,7 +438,7 @@ def signal_dispatcher(state):
 
 
 # =========================================================
-# 8. TASK GENERATOR
+# 9. TASK GENERATOR
 # =========================================================
 
 def task_generator(
@@ -456,7 +499,7 @@ def task_generator(
 
 
 # =========================================================
-# 9. TASK SELECTION
+# 10. TASK SELECTION
 # =========================================================
 
 def select_task(
@@ -504,7 +547,7 @@ def select_task(
 
 
 # =========================================================
-# 10. CENTRAL DISPATCHER
+# 11. CENTRAL DISPATCHER
 # =========================================================
 
 def central_dispatcher(
@@ -576,7 +619,7 @@ def central_dispatcher(
 
 
 # =========================================================
-# 11. STORAGE TASK PROCESS
+# 12. STORAGE TASK PROCESS
 # =========================================================
 
 def perform_storage_task(
@@ -685,7 +728,7 @@ def perform_storage_task(
 
 
 # =========================================================
-# 12. RETRIEVAL TASK PROCESS
+# 13. RETRIEVAL TASK PROCESS
 # =========================================================
 
 def perform_retrieval_task(
@@ -782,7 +825,7 @@ def perform_retrieval_task(
 
 
 # =========================================================
-# 13. ROBOT WORKER
+# 14. ROBOT WORKER
 # =========================================================
 
 def robot_worker(
@@ -894,7 +937,7 @@ def robot_worker(
 
 
 # =========================================================
-# 14. QUEUE MONITOR
+# 15. QUEUE MONITOR
 # =========================================================
 
 def queue_monitor(
@@ -915,7 +958,7 @@ def queue_monitor(
 
 
 # =========================================================
-# 15. SUMMARY CALCULATION
+# 16. SUMMARY CALCULATION
 # =========================================================
 
 def calculate_summary(
@@ -980,18 +1023,25 @@ def calculate_summary(
 
 
 # =========================================================
-# 16. RUN ONE STRATEGY
+# 17. RUN ONE STRATEGY
 # =========================================================
 
 def run_simulation(
     strategy,
     scenario_name="baseline",
+    scenario_config=None,
 ):
     strategy = strategy.upper()
 
-    scenario = get_scenario(
-        scenario_name
-    )
+    if scenario_config is not None:
+        # Allows the dashboard to run an ad-hoc scenario (e.g. an
+        # imported CSV task list) without registering it in scenarios.py.
+        scenario = scenario_config
+        scenario_name = scenario_config.get("name", scenario_name)
+    else:
+        scenario = get_scenario(
+            scenario_name
+        )
 
     number_of_robots = scenario[
         "number_of_robots"
@@ -1117,7 +1167,7 @@ def run_simulation(
 
 
 # =========================================================
-# 17. PRINT EVENT LOG
+# 18. PRINT EVENT LOG
 # =========================================================
 
 def print_event_log(result):
@@ -1193,7 +1243,7 @@ def print_event_log(result):
 
 
 # =========================================================
-# 18. PERCENTAGE CHANGE
+# 19. PERCENTAGE CHANGE
 # =========================================================
 
 def percentage_change(
@@ -1217,7 +1267,7 @@ def percentage_change(
 
 
 # =========================================================
-# 19. PRINT COMPARISON
+# 20. PRINT COMPARISON
 # =========================================================
 
 def print_comparison(
@@ -1327,11 +1377,11 @@ def print_comparison(
 
 
 # =========================================================
-# 20. MAIN PROGRAM
+# 21. MAIN PROGRAM
 # =========================================================
 
 def main():
-    scenario_name = "high_availability"
+    scenario_name = "retrieval_dominant"
 
     fifo_result = run_simulation(
         "FIFO",
