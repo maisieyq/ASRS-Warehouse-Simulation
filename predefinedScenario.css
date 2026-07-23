@@ -1,0 +1,33 @@
+.sidebar-stat-card {
+    background: #FFFFFF;
+    border: 1px solid #D7E1EB;
+    border-radius: 14px;
+    padding: 1rem 0.9rem;
+    min-height: 118px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    box-shadow:
+        0 4px 12px
+        rgba(17, 45, 72, 0.08);
+    margin-bottom: 0.35rem;
+}
+
+.sidebar-stat-label {
+    color: #2F78A5 !important;
+    font-size: 0.86rem;
+    font-weight: 750;
+    margin-bottom: 0.45rem;
+}
+
+.sidebar-stat-value {
+    color: #0B4F78 !important;
+    font-size: 2rem;
+    line-height: 1;
+    font-weight: 900;
+}
+
+[data-testid="stSidebar"]
+.sidebar-stat-card * {
+    opacity: 1 !important;
+}
