@@ -1,0 +1,8 @@
+Metric,FIFO,Deferred Commitment,Deferred vs FIFO (%),Better Strategy
+Average Waiting Time,20.041666666666668,18.666666666666668,-6.86070686070686,Deferred Commitment
+Average Completion Time,37.583333333333336,36.166666666666664,-3.7694013303769522,Deferred Commitment
+Average Travel Distance,13.541666666666666,13.5,-0.3076923076923033,Deferred Commitment
+Makespan,76.0,83.0,9.210526315789473,FIFO
+Average Queue Length,3.090909090909091,2.642857142857143,-14.49579831932773,Deferred Commitment
+Maximum Queue Length,9.0,9.0,0.0,Tie
+Total Distance,162.5,162.0,-0.3076923076923077,Deferred Commitment

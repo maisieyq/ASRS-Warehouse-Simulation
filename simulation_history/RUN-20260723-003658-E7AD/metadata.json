@@ -1,0 +1,20 @@
+{
+  "simulation_id": "RUN-20260723-003658-E7AD",
+  "configuration_key": "high_demand",
+  "created_at": "2026-07-23 00:36:58",
+  "updated_at": "2026-07-23 00:36:58",
+  "status": "Completed",
+  "scenario_type": "High Demand Scenario",
+  "scenario_source": "Predefined scenario",
+  "warehouse_size": "9 × 7",
+  "rack_locations": 12,
+  "number_of_robots": 3,
+  "number_of_tasks": 12,
+  "arrival_pattern": "High demand",
+  "storage_ratio": 50,
+  "retrieval_ratio": 50,
+  "animation_key": "high_demand",
+  "results_folder": "C:\\Users\\ASUS\\Downloads\\tp\\SimPyProject\\simulation_history\\RUN-20260723-003658-E7AD",
+  "fifo_animation": "C:\\Users\\ASUS\\Downloads\\tp\\SimPyProject\\ScenarioBasicConfig\\outputs\\high_demand\\fifo_warehouse_animation.gif",
+  "deferred_animation": "C:\\Users\\ASUS\\Downloads\\tp\\SimPyProject\\ScenarioBasicConfig\\outputs\\high_demand\\deferred_warehouse_animation.gif"
+}

@@ -1,0 +1,7 @@
+Strategy,Robot,Completed Tasks,Total Distance,Busy Time,Utilization (%)
+FIFO,R1,4,49.5,65.5,86.18421052631578
+FIFO,R2,4,59.0,75.0,98.68421052631578
+FIFO,R3,4,54.0,70.0,92.10526315789474
+Deferred Commitment,R1,5,63.0,83.0,100.0
+Deferred Commitment,R2,3,43.5,55.5,66.86746987951807
+Deferred Commitment,R3,4,55.5,71.5,86.14457831325302

@@ -1,0 +1,14 @@
+{
+  "strategy": "DEFERRED",
+  "completed_tasks": 12,
+  "makespan": 83.0,
+  "average_waiting_time": 18.666666666666668,
+  "average_completion_time": 36.166666666666664,
+  "average_travel_distance": 13.5,
+  "total_distance": 162.0,
+  "average_queue_length": 2.642857142857143,
+  "maximum_queue_length": 9,
+  "scenario": "high_demand",
+  "scenario_name": "High Demand Scenario",
+  "scenario_description": "Higher workload condition with more tasks arriving closely together. This creates queue pressure."
+}
