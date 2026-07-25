@@ -72,14 +72,22 @@ ACCESS_OFFSET = 0.5
 # drives across a row of racks to change aisles.
 CORRIDOR_Y = 0
 
+ROBOT_SPEED = 1.0
 
-def get_rack_access_position(rack_name):
+LOAD_TIME = 2.0
+STORE_TIME = 2.0
+PICK_TIME = 2.0
+UNLOAD_TIME = 2.0
+
+
+
+def get_rack_access_position(rack_name, rack_positions):
     """
     The rack position is the visual rack centre.
     The rack access position is where the robot stops beside the rack.
     The robot does not move into the rack block itself.
     """
-    rack_x, rack_y = RACK_POSITIONS[rack_name]
+    rack_x, rack_y = rack_positions[rack_name]
 
     return (
         rack_x - ACCESS_OFFSET,
@@ -87,12 +95,6 @@ def get_rack_access_position(rack_name):
     )
 
 
-ROBOT_SPEED = 1.0
-
-LOAD_TIME = 2.0
-STORE_TIME = 2.0
-PICK_TIME = 2.0
-UNLOAD_TIME = 2.0
 
 
 
@@ -107,8 +109,9 @@ class Task:
         task_type,
         arrival_time,
         rack_name,
+        rack_positions,
     ):
-        if rack_name not in RACK_POSITIONS:
+        if rack_name not in rack_positions:
             raise ValueError(
                 f"Unknown rack name: {rack_name}"
             )
@@ -128,11 +131,11 @@ class Task:
         self.rack_name = rack_name
 
         # Rack centre is used for drawing / display.
-        self.rack_position = RACK_POSITIONS[rack_name]
+        self.rack_position = rack_positions[rack_name]
 
         # Rack access position is used for robot travel.
         self.rack_access_position = (
-            get_rack_access_position(rack_name)
+            get_rack_access_position(rack_name,rack_positions,)
         )
 
         self.start_time = None
@@ -210,11 +213,11 @@ def manhattan_distance(
     )
 
 
-def travel_time(distance):
-    return (
-        distance
-        / ROBOT_SPEED
-    )
+def travel_time(
+    distance,
+    robot_speed=ROBOT_SPEED,
+):
+    return distance / robot_speed
 
 
 def route_waypoints(
@@ -338,7 +341,7 @@ def estimate_route_distance(
 # 5. TASK CREATION
 # =========================================================
 
-def create_tasks(task_data):
+def create_tasks(task_data,rack_positions):
     tasks = []
 
     for data in task_data:
@@ -347,6 +350,7 @@ def create_tasks(task_data):
             task_type=data["task_type"],
             arrival_time=data["arrival_time"],
             rack_name=data["rack_name"],
+            rack_positions=rack_positions,
         )
 
         tasks.append(task)
@@ -585,6 +589,8 @@ def perform_storage_task(
     robot,
     task,
     event_log,
+    input_station=INPUT_STATION,
+    robot_speed=ROBOT_SPEED,
 ):
     distance_to_input = route_distance(
         robot.position,
@@ -604,7 +610,7 @@ def perform_storage_task(
     )
 
     yield env.timeout(
-        travel_time(distance_to_input)
+        travel_time(distance_to_input, robot_speed)
     )
 
     robot.position = INPUT_STATION
@@ -656,7 +662,7 @@ def perform_storage_task(
     )
 
     yield env.timeout(
-        travel_time(distance_to_rack_access)
+        travel_time(distance_to_rack_access,robot_speed)
     )
 
     robot.position = task.rack_access_position
@@ -694,6 +700,8 @@ def perform_retrieval_task(
     robot,
     task,
     event_log,
+    output_station=OUTPUT_STATION,
+    robot_speed=ROBOT_SPEED,
 ):
     distance_to_rack_access = route_distance(
         robot.position,
@@ -716,7 +724,7 @@ def perform_retrieval_task(
     )
 
     yield env.timeout(
-        travel_time(distance_to_rack_access)
+        travel_time(distance_to_rack_access, robot_speed)
     )
 
     robot.position = task.rack_access_position
@@ -756,7 +764,7 @@ def perform_retrieval_task(
     )
 
     yield env.timeout(
-        travel_time(distance_to_output)
+        travel_time(distance_to_output, robot_speed)
     )
 
     robot.position = OUTPUT_STATION
@@ -795,6 +803,9 @@ def robot_worker(
     state,
     completion_event,
     event_log,
+    input_station=INPUT_STATION,
+    output_station=OUTPUT_STATION,
+    robot_speed=ROBOT_SPEED,
 ):
     while True:
         task = yield robot.assignment_store.get()
@@ -821,6 +832,8 @@ def robot_worker(
                     robot=robot,
                     task=task,
                     event_log=event_log,
+                    input_station=input_station,
+                    robot_speed=robot_speed,
                 )
             )
 
@@ -832,6 +845,8 @@ def robot_worker(
                     robot=robot,
                     task=task,
                     event_log=event_log,
+                    output_station=output_station,
+                    robot_speed=robot_speed,
                 )
             )
 
@@ -990,9 +1005,20 @@ def run_simulation(
 ):
     strategy = strategy.upper()
 
-    if scenario_config is not None:
+    if strategy not in {"FIFO", "DEFERRED"}:
+        raise ValueError(
+            "Strategy must be FIFO or DEFERRED."
+        )
+
+    is_custom_scenario = scenario_config is not None
+
+    # -----------------------------------------------------
+    # 1. Load the scenario
+    # -----------------------------------------------------
+    if is_custom_scenario:
         scenario = scenario_config
-        scenario_name = scenario_config.get(
+
+        scenario_name = scenario.get(
             "name",
             scenario_name,
         )
@@ -1001,22 +1027,175 @@ def run_simulation(
             scenario_name
         )
 
-    number_of_robots = scenario[
-        "number_of_robots"
-    ]
+    if scenario is None:
+        raise ValueError(
+            "The scenario could not be loaded."
+        )
+
+    # -----------------------------------------------------
+    # 2. Validate the basic scenario structure
+    # -----------------------------------------------------
+    required_keys = {
+        "name",
+        "description",
+        "number_of_robots",
+        "tasks",
+    }
+
+    missing_keys = required_keys.difference(
+        scenario
+    )
+
+    if missing_keys:
+        raise ValueError(
+            "Scenario is missing required fields: "
+            + ", ".join(sorted(missing_keys))
+        )
+
+    number_of_robots = int(
+        scenario["number_of_robots"]
+    )
+
+    if number_of_robots < 1:
+        raise ValueError(
+            "number_of_robots must be at least 1."
+        )
 
     task_data = scenario["tasks"]
 
-    robot_start_positions = (
-        generate_robot_start_positions(
-            number_of_robots
+    if not task_data:
+        raise ValueError(
+            "The scenario must contain at least one task."
         )
-    )
 
+    # -----------------------------------------------------
+    # 3. Resolve warehouse configuration
+    # -----------------------------------------------------
+    if is_custom_scenario:
+        warehouse = scenario.get(
+            "warehouse",
+            {},
+        )
+
+        rack_positions = warehouse.get(
+            "rack_positions"
+        )
+
+        if not rack_positions:
+            raise ValueError(
+                "Custom scenarios must define "
+                "scenario['warehouse']['rack_positions']."
+            )
+
+        input_station = tuple(
+            warehouse.get(
+                "entry_point",
+                INPUT_STATION,
+            )
+        )
+
+        output_station = tuple(
+            warehouse.get(
+                "exit_point",
+                OUTPUT_STATION,
+            )
+        )
+
+        corridor_y = warehouse.get(
+            "corridor_y",
+            CORRIDOR_Y,
+        )
+
+        robot_speed = float(
+            scenario.get(
+                "robot_speed",
+                ROBOT_SPEED,
+            )
+        )
+
+    else:
+        # Preserve predefined scenario behavior.
+        warehouse = {}
+        rack_positions = RACK_POSITIONS
+        input_station = INPUT_STATION
+        output_station = OUTPUT_STATION
+        corridor_y = CORRIDOR_Y
+        robot_speed = ROBOT_SPEED
+
+
+    # -----------------------------------------------------
+    # Resolve robot starting positions
+    # -----------------------------------------------------
+    if is_custom_scenario:
+        configured_positions = warehouse.get(
+            "robot_start_positions"
+        )
+
+        if configured_positions is None:
+            raise ValueError(
+                "Custom scenarios must define "
+                "scenario['warehouse']"
+                "['robot_start_positions']."
+            )
+
+        if not isinstance(
+            configured_positions,
+            dict,
+        ):
+            raise ValueError(
+                "robot_start_positions must be a dictionary."
+            )
+
+        robot_start_positions = {}
+
+        for robot_id, position in configured_positions.items():
+            converted_robot_id = int(robot_id)
+
+            if (
+                not isinstance(position, (list, tuple))
+                or len(position) != 2
+            ):
+                raise ValueError(
+                    "Every robot start position must contain "
+                    "exactly two coordinates."
+                )
+
+            robot_start_positions[converted_robot_id] = (
+                float(position[0]),
+                float(position[1]),
+            )
+
+        expected_robot_ids = set(
+            range(1, number_of_robots + 1)
+        )
+
+        actual_robot_ids = set(
+            robot_start_positions.keys()
+        )
+
+        if actual_robot_ids != expected_robot_ids:
+            raise ValueError(
+                "Custom robot_start_positions must contain "
+                "exactly one position for every robot. "
+                f"Expected: {sorted(expected_robot_ids)}. "
+                f"Received: {sorted(actual_robot_ids)}."
+            )
+
+    else:
+        robot_start_positions = (
+            generate_robot_start_positions(
+                number_of_robots
+            )
+        )
+            
+    # -----------------------------------------------------
+    # 4. Create the simulation environment
+    # -----------------------------------------------------
     env = simpy.Environment()
 
     tasks = create_tasks(
-        task_data
+        task_data=task_data,
+        rack_positions=rack_positions,
     )
 
     pending_tasks = []
@@ -1024,6 +1203,9 @@ def run_simulation(
     queue_history = []
     event_log = []
 
+    # -----------------------------------------------------
+    # 5. Create robots
+    # -----------------------------------------------------
     robots = [
         Robot(
             env=env,
@@ -1049,6 +1231,9 @@ def run_simulation(
         "dispatch_event": env.event(),
     }
 
+    # -----------------------------------------------------
+    # 6. Start the task generator
+    # -----------------------------------------------------
     env.process(
         task_generator(
             env=env,
@@ -1060,6 +1245,9 @@ def run_simulation(
         )
     )
 
+    # -----------------------------------------------------
+    # 7. Start the central dispatcher
+    # -----------------------------------------------------
     env.process(
         central_dispatcher(
             env=env,
@@ -1071,6 +1259,9 @@ def run_simulation(
         )
     )
 
+    # -----------------------------------------------------
+    # 8. Start each robot worker
+    # -----------------------------------------------------
     for robot in robots:
         env.process(
             robot_worker(
@@ -1083,9 +1274,15 @@ def run_simulation(
                 state=state,
                 completion_event=completion_event,
                 event_log=event_log,
+                input_station=input_station,
+                output_station=output_station,
+                robot_speed=robot_speed,
             )
         )
 
+    # -----------------------------------------------------
+    # 9. Start queue monitoring
+    # -----------------------------------------------------
     env.process(
         queue_monitor(
             env=env,
@@ -1095,10 +1292,16 @@ def run_simulation(
         )
     )
 
+    # -----------------------------------------------------
+    # 10. Run until all tasks are complete
+    # -----------------------------------------------------
     env.run(
         until=completion_event
     )
 
+    # -----------------------------------------------------
+    # 11. Calculate final summary
+    # -----------------------------------------------------
     summary = calculate_summary(
         strategy=strategy,
         completed_tasks=completed_tasks,
@@ -1108,11 +1311,16 @@ def run_simulation(
     )
 
     summary["scenario"] = scenario_name
-    summary["scenario_name"] = scenario["name"]
+    summary["scenario_name"] = scenario[
+        "name"
+    ]
     summary["scenario_description"] = scenario[
         "description"
     ]
 
+    # -----------------------------------------------------
+    # 12. Return the complete result
+    # -----------------------------------------------------
     return {
         "summary": summary,
         "tasks": completed_tasks,
@@ -1120,7 +1328,9 @@ def run_simulation(
         "queue_history": queue_history,
         "event_log": event_log,
         "scenario": scenario,
-        "robot_start_positions": robot_start_positions,
+        "robot_start_positions": (
+            robot_start_positions
+        ),
     }
 
 

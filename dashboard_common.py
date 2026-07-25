@@ -32,7 +32,7 @@ ANIMATION_CACHE_FOLDER = (
     / ".dashboard_animation_cache"
 )
 
-VALID_RACKS = {
+PREDEFINED_VALID_RACKS = {
     f"{letter}{number}"
     for letter in "ABCD"
     for number in range(1, 4)
