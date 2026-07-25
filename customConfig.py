@@ -1,23 +1,122 @@
 from __future__ import annotations
 
-import hashlib
+import json
+import hashlib #unique identifier for custom scenarios
 from typing import Callable
 
-import pandas as pd
+import pandas as pd #convert tasks to csv for hashing
 import streamlit as st
 
-from dashboard_common import ARRIVAL_INTERVALS, VALID_RACKS
+from dashboard_common import ARRIVAL_INTERVALS
 
+def generate_rack_locations(
+    warehouse_rows: int,
+    warehouse_columns: int,
+    rack_rows: int,
+    rack_columns: int,
+) -> dict[str, tuple[int, int]]:
+    if rack_rows > warehouse_rows - 2:
+        raise ValueError(
+            "The requested rack rows do not fit inside the warehouse."
+        )
+
+    if rack_columns > warehouse_columns - 2:
+        raise ValueError(
+            "The requested rack columns do not fit inside the warehouse."
+        )
+
+    row_positions = [
+        round(
+            1 + index * (warehouse_rows - 3) /
+            max(rack_rows - 1, 1)
+        )
+        for index in range(rack_rows)
+    ]
+
+    column_positions = [
+        round(
+            1 + index * (warehouse_columns - 3) /
+            max(rack_columns - 1, 1)
+        )
+        for index in range(rack_columns)
+    ]
+
+    rack_positions: dict[str, tuple[int, int]] = {}
+
+    rack_number = 1
+
+    for row in row_positions:
+        for column in column_positions:
+            rack_positions[f"R{rack_number:02d}"] = (
+                column,
+                row,
+            )
+            rack_number += 1
+
+    return rack_positions
+
+def generate_warehouse_grid(
+    rows: int,
+    columns: int,
+    rack_row_spacing: int = 2,
+    rack_column_spacing: int = 2,
+) -> tuple[list[list[str]], dict[str, tuple[int, int]]]:
+    grid = [
+        ["empty" for _ in range(columns)]
+        for _ in range(rows)
+    ]
+
+    rack_positions: dict[str, tuple[int, int]] = {}
+    rack_number = 1
+
+    for row in range(
+        rack_row_spacing,
+        rows - 1,
+        rack_row_spacing + 1,
+    ):
+        for column in range(
+            rack_column_spacing,
+            columns - 1,
+            rack_column_spacing + 1,
+        ):
+            rack_name = f"R{rack_number:02d}"
+
+            grid[row][column] = rack_name
+            rack_positions[rack_name] = (
+                column,
+                row,
+            )
+
+            rack_number += 1
+
+    return grid, rack_positions
+
+def generate_rack_names(
+    rack_columns: int,
+    rack_rows: int,
+) -> list[str]:
+    return [
+        f"{chr(65 + column)}{row + 1}"
+        for column in range(rack_columns)
+        for row in range(rack_rows)
+    ]
 
 def generate_custom_tasks(
     number_of_tasks: int,
     storage_ratio: int,
     arrival_pattern: str,
+    rack_positions: dict[str, tuple[int, int]],
 ) -> list[dict]:
     interval = ARRIVAL_INTERVALS[arrival_pattern]
     storage_target = storage_ratio / 100.0
 
-    rack_names = sorted(VALID_RACKS)
+    rack_names = sorted(rack_positions)
+    #  Error handling for empty rack positions
+    if not rack_names:
+        raise ValueError(
+            "The warehouse must contain at least one rack."
+        )
+
     tasks: list[dict] = []
     storage_created = 0
 
@@ -32,6 +131,12 @@ def generate_custom_tasks(
         else:
             task_type = "retrieval"
 
+        # Assign rack name based on index and available racks
+        rack_name = rack_names[
+            index % len(rack_names)
+        ]
+
+
         tasks.append(
             {
                 "task_id": f"T{index + 1:03d}",
@@ -40,25 +145,105 @@ def generate_custom_tasks(
                     index * interval,
                     2,
                 ),
-                "rack_name": rack_names[
-                    index % len(rack_names)
-                ],
+                "rack_name": rack_name,
+                "rack_position": rack_positions[rack_name],
             }
         )
 
     return tasks
 
+def generate_robot_start_positions(
+    number_of_robots: int,
+    warehouse_columns: int,
+) -> dict[int, tuple[int, int]]:
+    available_positions = [
+        (column, 0)
+        for column in range(
+            1,
+            warehouse_columns - 1,
+        )
+    ]
+
+    if number_of_robots > len(
+        available_positions
+    ):
+        raise ValueError(
+            "There are too many robots for "
+            "the selected warehouse width."
+        )
+
+    if number_of_robots == 1:
+        selected_positions = [
+            available_positions[
+                len(available_positions) // 2
+            ]
+        ]
+    else:
+        last_index = len(
+            available_positions
+        ) - 1
+
+        selected_positions = [
+            available_positions[
+                round(
+                    index
+                    * last_index
+                    / (number_of_robots - 1)
+                )
+            ]
+            for index in range(
+                number_of_robots
+            )
+        ]
+
+    return {
+        robot_id: selected_positions[
+            robot_id - 1
+        ]
+        for robot_id in range(
+            1,
+            number_of_robots + 1,
+        )
+    }
+
 
 def build_custom_scenario(
+    warehouse_rows: int,
+    warehouse_columns: int,
+    rack_rows: int,
+    rack_columns: int,
     number_of_robots: int,
+    robot_speed: float,
     number_of_tasks: int,
     storage_ratio: int,
     arrival_pattern: str,
 ) -> tuple[str, dict]:
+    rack_positions = generate_rack_locations(
+        warehouse_rows=warehouse_rows,
+        warehouse_columns=warehouse_columns,
+        rack_rows=rack_rows,
+        rack_columns=rack_columns,
+    )
+
     tasks = generate_custom_tasks(
         number_of_tasks=number_of_tasks,
         storage_ratio=storage_ratio,
         arrival_pattern=arrival_pattern,
+        rack_positions=rack_positions,
+    )
+
+    entry_point = (0, 0)
+
+    exit_point = (
+        warehouse_columns - 1,
+        0,
+    )
+
+    robot_start_positions = (
+        generate_robot_start_positions(
+            number_of_robots=number_of_robots,
+            warehouse_columns=warehouse_columns,
+        )
     )
 
     scenario = {
@@ -67,12 +252,27 @@ def build_custom_scenario(
             "A user-configured scenario generated "
             "automatically from the selected parameters."
         ),
-        "number_of_robots": int(number_of_robots),
+        "number_of_robots": number_of_robots,
+        "robot_speed": robot_speed,
+        "warehouse": {
+            "rows": warehouse_rows,
+            "columns": warehouse_columns,
+            "rack_positions": rack_positions,
+            "entry_point": entry_point,
+            "exit_point": exit_point,
+            "robot_start_positions": (
+                robot_start_positions
+            ),
+        },
         "tasks": tasks,
     }
 
-    signature = pd.DataFrame(tasks).to_csv(
-        index=False
+    # ????? 
+    # this is to generate a unique identifier for the custom scenario based on its configuration. 
+    # It creates a JSON string representation of the scenario, sorts the keys for consistency, and then computes a SHA-256 hash of this string combined with the number of robots and the arrival pattern. The first 12 characters of the hash are used as a unique digest to identify the custom scenario. This ensures that even if two scenarios have similar configurations, they will have different identifiers if any parameter differs.
+    signature = json.dumps(
+        scenario,
+        sort_keys=True,
     )
 
     digest = hashlib.sha256(
@@ -87,6 +287,10 @@ def build_custom_scenario(
 
 
 def _summary_table(
+    warehouse_rows: int,
+    warehouse_columns: int,
+    rack_count: int,
+    rack_positions: dict[str, tuple[int, int]],
     number_of_robots: int,
     number_of_tasks: int,
     arrival_pattern: str,
@@ -102,12 +306,13 @@ def _summary_table(
 
         '<div class="summary-row">'
         '<span>Warehouse Size</span>'
-        '<strong>9 × 7 (Fixed)</strong>'
+        f'<strong>{warehouse_rows} × '
+        f'{warehouse_columns}</strong>'
         '</div>'
 
         '<div class="summary-row">'
-        '<span>Rack Locations</span>'
-        '<strong>12 (Fixed)</strong>'
+        '<span>Rack Positions</span>'
+        f'<strong>{len(rack_positions)}</strong>'
         '</div>'
 
         '<div class="summary-divider"></div>'
@@ -147,36 +352,56 @@ def render_custom_sidebar(
         left, right = st.columns(2)
 
         with left:
-            st.number_input(
+            warehouse_rows = st.number_input(
                 "Rows (Y)",
-                min_value=7,
-                max_value=7,
+                min_value=4,
+                max_value=20,
                 value=7,
-                disabled=True,
-                help=(
-                    "The current backend uses a fixed "
-                    "seven-row warehouse."
-                ),
+                step=1,
             )
+
+            
 
         with right:
-            st.number_input(
+            warehouse_columns = st.number_input(
                 "Columns (X)",
-                min_value=9,
-                max_value=9,
+                min_value=4,
+                max_value=20,
                 value=9,
-                disabled=True,
-                help=(
-                    "The current backend uses a fixed "
-                    "nine-column warehouse."
+                step=1,
+            )
+            
+        rack_left, rack_right = st.columns(2)
+
+        with rack_left:
+            rack_rows = st.number_input(
+                "Rack rows",
+                min_value=1,
+                max_value=max(
+                    1,
+                    int(warehouse_rows) - 2,
                 ),
+                value=min(
+                    3,
+                    int(warehouse_rows) - 2,
+                ),
+                step=1,
             )
 
-        st.selectbox(
-            "Rack layout",
-            ["4 rack columns × 3 rack rows"],
-            disabled=True,
-        )
+        with rack_right:
+            rack_columns = st.number_input(
+                "Rack columns",
+                min_value=1,
+                max_value=max(
+                    1,
+                    int(warehouse_columns) - 2,
+                ),
+                value=min(
+                    4,
+                    int(warehouse_columns) - 2,
+                ),
+                step=1,
+            )
 
         st.markdown("### 2. Robot configuration")
 
@@ -188,12 +413,12 @@ def render_custom_sidebar(
             step=1,
         )
 
-        st.number_input(
+        robot_speed = st.number_input(
             "Robot speed (cell/sec)",
-            min_value=1.0,
-            max_value=1.0,
+            min_value=0.1,
+            max_value=5.0,
             value=1.0,
-            disabled=True,
+            step=0.1,
             help=(
                 "Robot speed is currently fixed "
                 "inside simulation.py."
@@ -228,25 +453,55 @@ def render_custom_sidebar(
 
         scenario_key, selected_scenario = (
             build_custom_scenario(
-                number_of_robots=int(
-                    number_of_robots
-                ),
-                number_of_tasks=int(
-                    number_of_tasks
-                ),
+                warehouse_rows=int(warehouse_rows),
+                warehouse_columns=int(warehouse_columns),
+                rack_rows=int(rack_rows),
+                rack_columns=int(rack_columns),
+                number_of_robots=int(number_of_robots),
+                robot_speed=float(robot_speed),
+                number_of_tasks=int(number_of_tasks),
                 storage_ratio=int(storage_ratio),
                 arrival_pattern=arrival_pattern,
             )
         )
+        rack_positions = selected_scenario[
+            "warehouse"
+        ]["rack_positions"]
 
         st.markdown("### Configuration summary")
 
         _summary_table(
-            number_of_robots=int(number_of_robots),
-            number_of_tasks=int(number_of_tasks),
+            warehouse_rows=int(
+                warehouse_rows
+            ),
+            warehouse_columns=int(
+                warehouse_columns
+            ),
+            rack_count=len(
+                selected_scenario[
+                    "warehouse"
+                ][
+                    "rack_positions"
+                ]
+            ),
+            rack_positions=selected_scenario[
+                "warehouse"
+            ][
+                "rack_positions"
+            ],
+            number_of_robots=int(
+                number_of_robots
+            ),
+            number_of_tasks=int(
+                number_of_tasks
+            ),
             arrival_pattern=arrival_pattern,
-            storage_ratio=int(storage_ratio),
-            retrieval_ratio=int(retrieval_ratio),
+            storage_ratio=int(
+                storage_ratio
+            ),
+            retrieval_ratio=int(
+                retrieval_ratio
+            ),
         )
 
         st.button(
@@ -255,10 +510,24 @@ def render_custom_sidebar(
             on_click=clear_callback,
         )
 
+        # Validate configuration and display errors if any
+        errors = validate_configuration(
+            warehouse_rows=int(warehouse_rows),
+            warehouse_columns=int(warehouse_columns),
+            rack_rows=int(rack_rows),
+            rack_columns=int(rack_columns),
+            number_of_robots=int(number_of_robots),
+        )
+
+        for error in errors:
+            st.error(error)
+
+
         run_clicked = st.button(
             "▶ Run strategy comparison",
             use_container_width=True,
             type="primary",
+            disabled=bool(errors),
         )
 
         st.caption(
@@ -272,3 +541,59 @@ def render_custom_sidebar(
         "scenario": selected_scenario,
         "run_clicked": run_clicked,
     }
+
+def validate_configuration(
+    warehouse_rows: int,
+    warehouse_columns: int,
+    rack_rows: int,
+    rack_columns: int,
+    number_of_robots: int,
+) -> list[str]:
+    errors: list[str] = []
+
+    if warehouse_rows < 1:
+        errors.append(
+            "Warehouse height must be at least 1 row."
+        )
+
+    if warehouse_columns < 1:
+        errors.append(
+            "Warehouse width must be at least 1 column."
+        )
+
+    if rack_rows > warehouse_rows - 2:
+        errors.append(
+            "There are too many rack rows for the "
+            "selected warehouse height."
+        )
+
+    if rack_columns > warehouse_columns - 2:
+        errors.append(
+            "There are too many rack columns for the "
+            "selected warehouse width."
+        )
+
+    available_boundary_cells = (
+        warehouse_rows * 2
+        + warehouse_columns * 2
+        - 4
+    )
+
+    if number_of_robots > available_boundary_cells:
+        errors.append(
+            "There are not enough starting cells "
+            "for the selected number of robots."
+        )
+
+    available_starting_cells = (
+        warehouse_columns - 2
+    )
+
+    if number_of_robots > available_starting_cells:
+        errors.append(
+            "There are too many robots for the "
+            "available starting positions along "
+            "the bottom corridor."
+        )
+
+    return errors
