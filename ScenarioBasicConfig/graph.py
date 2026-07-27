@@ -1,4 +1,6 @@
 import os
+import time
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 
@@ -11,6 +13,11 @@ from scenarios import list_scenarios, get_scenario
 # =========================================================
 
 OUTPUT_FOLDER = "outputs"
+
+# Web-friendly rendering settings
+GRAPH_DPI = 100
+MAX_TASK_GRAPH_WIDTH = 18
+REUSE_EXISTING_GRAPHS = True
 
 
 def create_output_folder(folder_path):
@@ -46,25 +53,52 @@ def save_figure(
     figure,
     folder_path,
     filename,
+    force_rebuild=False,
 ):
     filepath = os.path.join(
         folder_path,
         filename,
     )
 
+    path = Path(filepath)
+
+    if (
+        REUSE_EXISTING_GRAPHS
+        and not force_rebuild
+        and path.exists()
+        and path.stat().st_size > 0
+    ):
+        plt.close(figure)
+
+        print(
+            f"Using existing graph: {filepath}"
+        )
+
+        return filepath
+
+    start_time = time.perf_counter()
+
     figure.tight_layout()
 
     figure.savefig(
         filepath,
-        dpi=300,
-        bbox_inches="tight",
+        dpi=GRAPH_DPI,
     )
 
     plt.close(figure)
 
+    elapsed = time.perf_counter() - start_time
+
     print(
         f"Generated: {filepath}"
     )
+
+    print(
+        f"Graph generation time: "
+        f"{elapsed:.2f} seconds"
+    )
+
+    return filepath
 
 
 # =========================================================
@@ -107,7 +141,7 @@ def create_main_metrics_graph(
     bar_width = 0.35
 
     figure, axis = plt.subplots(
-        figsize=(10, 6)
+        figsize=(9, 5.5)
     )
 
     fifo_bars = axis.bar(
@@ -217,7 +251,7 @@ def create_waiting_time_graph(
     bar_width = 0.35
 
     figure, axis = plt.subplots(
-        figsize=(max(10, len(task_ids) * 0.8), 6)
+        figsize=(min(MAX_TASK_GRAPH_WIDTH, max(10, len(task_ids) * 0.45)), 6)
     )
 
     fifo_bars = axis.bar(
@@ -327,7 +361,7 @@ def create_completion_time_graph(
     bar_width = 0.35
 
     figure, axis = plt.subplots(
-        figsize=(max(10, len(task_ids) * 0.8), 6)
+        figsize=(min(MAX_TASK_GRAPH_WIDTH, max(10, len(task_ids) * 0.45)), 6)
     )
 
     fifo_bars = axis.bar(
@@ -437,7 +471,7 @@ def create_travel_distance_graph(
     bar_width = 0.35
 
     figure, axis = plt.subplots(
-        figsize=(max(10, len(task_ids) * 0.8), 6)
+        figsize=(min(MAX_TASK_GRAPH_WIDTH, max(10, len(task_ids) * 0.45)), 6)
     )
 
     fifo_bars = axis.bar(
@@ -544,7 +578,7 @@ def create_queue_length_graph(
     ]
 
     figure, axis = plt.subplots(
-        figsize=(11, 6)
+        figsize=(10, 5.5)
     )
 
     axis.step(
@@ -863,7 +897,7 @@ def create_total_performance_graph(
     bar_width = 0.35
 
     figure, axis = plt.subplots(
-        figsize=(8, 6)
+        figsize=(8, 5.5)
     )
 
     fifo_bars = axis.bar(
@@ -985,7 +1019,7 @@ def create_scenario_summary_graph(all_results):
 
     # Makespan comparison
     figure, axis = plt.subplots(
-        figsize=(11, 6)
+        figsize=(10, 5.5)
     )
 
     fifo_bars = axis.bar(
@@ -1057,7 +1091,7 @@ def create_scenario_summary_graph(all_results):
 
     # Total distance comparison
     figure, axis = plt.subplots(
-        figsize=(11, 6)
+        figsize=(10, 5.5)
     )
 
     fifo_bars = axis.bar(

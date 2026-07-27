@@ -1,21 +1,22 @@
 import os
+import time
+from bisect import bisect_right
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Rectangle
+from PIL import Image
 
 from simulation import (
     run_simulation,
     INPUT_STATION,
     OUTPUT_STATION,
-    RACK_POSITIONS,
     ROBOT_SPEED,
     LOAD_TIME,
     STORE_TIME,
     PICK_TIME,
     UNLOAD_TIME,
-    ACCESS_OFFSET,
-    CORRIDOR_Y,
     manhattan_distance,
     route_waypoints,
 )
@@ -31,8 +32,10 @@ OUTPUT_FOLDER = "outputs"
 
 SELECTED_SCENARIO = "retrieval_dominant"  # Options: "baseline", "high_demand", "low_availability", "high_availability", "storage_dominant", "retrieval_dominant"
 
-FRAME_STEP = 0.5
-ANIMATION_FPS = 4
+FRAME_STEP = 2.0
+ANIMATION_FPS = 5
+ANIMATION_DPI = 75
+FIGURE_SIZE = (10, 6)
 
 GRID_MIN_X = -0.5
 GRID_MAX_X = 8.5
@@ -327,97 +330,114 @@ def interpolate_segment(
 
 
 # =========================================================
-# 7. GET ROBOT STATE
+# 7. FAST ROBOT STATE LOOKUP
 # =========================================================
 
+def prepare_timeline_index(timeline):
+    return {
+        "segments": timeline,
+        "end_times": [
+            segment["end_time"]
+            for segment in timeline
+        ],
+    }
+
+
 def get_robot_state(
-    timeline,
+    indexed_timeline,
     simulation_time,
 ):
-    for index, segment in enumerate(timeline):
-        is_last_segment = (
-            index == len(timeline) - 1
-        )
+    segments = indexed_timeline["segments"]
+    end_times = indexed_timeline["end_times"]
 
-        within_segment = (
-            segment["start_time"]
-            <= simulation_time
-            < segment["end_time"]
-        )
+    if not segments:
+        return {
+            "position": (0.0, 0.0),
+            "status": "Idle",
+            "task_id": None,
+            "task_type": None,
+            "rack_name": None,
+        }
 
-        if (
-            is_last_segment
-            and simulation_time == segment["end_time"]
-        ):
-            within_segment = True
+    segment_index = bisect_right(
+        end_times,
+        simulation_time,
+    )
 
-        if within_segment:
-            duration = (
-                segment["end_time"]
-                - segment["start_time"]
-            )
+    if segment_index >= len(segments):
+        segment_index = len(segments) - 1
 
-            if duration == 0:
-                progress = 1.0
-            else:
-                progress = (
-                    simulation_time
-                    - segment["start_time"]
-                ) / duration
+    segment = segments[segment_index]
 
-            progress = max(
-                0.0,
-                min(1.0, progress),
-            )
+    duration = (
+        segment["end_time"]
+        - segment["start_time"]
+    )
 
-            position = interpolate_segment(
-                segment["start_position"],
-                segment["end_position"],
-                progress,
-            )
+    if duration <= 0:
+        progress = 1.0
+    else:
+        progress = (
+            simulation_time
+            - segment["start_time"]
+        ) / duration
 
-            return {
-                "position": position,
-                "status": segment["status"],
-                "task_id": segment["task_id"],
-                "task_type": segment["task_type"],
-                "rack_name": segment["rack_name"],
-            }
+    progress = max(
+        0.0,
+        min(1.0, progress),
+    )
 
-    final_segment = timeline[-1]
+    position = interpolate_segment(
+        segment["start_position"],
+        segment["end_position"],
+        progress,
+    )
 
     return {
-        "position": final_segment["end_position"],
-        "status": "Idle",
-        "task_id": None,
-        "task_type": None,
-        "rack_name": None,
+        "position": position,
+        "status": segment["status"],
+        "task_id": segment["task_id"],
+        "task_type": segment["task_type"],
+        "rack_name": segment["rack_name"],
     }
 
 
 # =========================================================
-# 8. QUEUE LENGTH
+# 8. FAST QUEUE LOOKUP
 # =========================================================
 
-def get_queue_length(
-    queue_history,
-    simulation_time,
-):
-    valid_records = [
-        record
-        for record in queue_history
-        if record["time"] <= simulation_time
-    ]
-
-    if not valid_records:
-        return 0
-
-    latest_record = max(
-        valid_records,
+def prepare_queue_history(queue_history):
+    sorted_history = sorted(
+        queue_history,
         key=lambda record: record["time"],
     )
 
-    return latest_record["queue_length"]
+    return (
+        [
+            record["time"]
+            for record in sorted_history
+        ],
+        [
+            record["queue_length"]
+            for record in sorted_history
+        ],
+    )
+
+
+def get_queue_length(
+    queue_times,
+    queue_lengths,
+    simulation_time,
+):
+    index = bisect_right(
+        queue_times,
+        simulation_time,
+    ) - 1
+
+    if index < 0:
+        return 0
+
+    return queue_lengths[index]
 
 
 # =========================================================
@@ -663,16 +683,52 @@ def draw_warehouse(
 
 
 # =========================================================
-# 11. CREATE ONE ANIMATION
+# 11. GIF VALIDATION
+# =========================================================
+
+def is_valid_gif(filepath):
+    path = Path(filepath)
+
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+
+    try:
+        with Image.open(path) as image:
+            image.verify()
+
+        return True
+
+    except Exception:
+        return False
+
+
+# =========================================================
+# 12. CREATE ONE ANIMATION
+
 # =========================================================
 
 def create_animation(
     strategy,
     scenario_name,
     result,
+    force_rebuild=False,
 ):
     timelines = build_robot_timelines(
         result
+    )
+
+    indexed_timelines = {
+        robot_id: prepare_timeline_index(timeline)
+        for robot_id, timeline in timelines.items()
+    }
+
+    queue_times, queue_lengths = prepare_queue_history(
+        result["queue_history"]
+    )
+
+    completion_times = sorted(
+        task.completion_time
+        for task in result["tasks"]
     )
 
     makespan = result["summary"]["makespan"]
@@ -680,6 +736,38 @@ def create_animation(
     robot_start_positions = result[
         "robot_start_positions"
     ]
+
+    scenario_folder = os.path.join(
+        OUTPUT_FOLDER,
+        scenario_name,
+    )
+
+    create_output_folder(
+        scenario_folder
+    )
+
+    filename = (
+        strategy.lower()
+        + "_warehouse_animation.gif"
+    )
+
+    filepath = os.path.join(
+        scenario_folder,
+        filename,
+    )
+
+    # Reuse a valid existing GIF unless a rebuild is requested.
+    if (
+        not force_rebuild
+        and is_valid_gif(filepath)
+    ):
+        print(
+            f"Using existing animation: {filepath}"
+        )
+        return filepath
+
+    if os.path.exists(filepath):
+        os.remove(filepath)
 
     frame_times = []
 
@@ -689,11 +777,21 @@ def create_animation(
         frame_times.append(current_time)
         current_time += FRAME_STEP
 
-    if frame_times[-1] < makespan:
+    if (
+        not frame_times
+        or frame_times[-1] < makespan
+    ):
         frame_times.append(makespan)
 
+    print(
+        f"Generating {len(frame_times)} frames "
+        f"for {strategy}..."
+    )
+
     figure, axis = plt.subplots(
-        figsize=(13, 8)
+        figsize=FIGURE_SIZE,
+        dpi=ANIMATION_DPI,
+        constrained_layout=False,
     )
 
     figure.subplots_adjust(
@@ -714,7 +812,7 @@ def create_animation(
         marker = axis.scatter(
             start_position[0],
             start_position[1],
-            s=150,
+            s=120,
             marker="o",
             zorder=5,
             label=f"Robot {robot_id}",
@@ -725,7 +823,7 @@ def create_animation(
             start_position[1] + 0.35,
             f"R{robot_id}",
             ha="center",
-            fontsize=9,
+            fontsize=8,
             fontweight="bold",
             zorder=6,
         )
@@ -738,7 +836,7 @@ def create_animation(
         0.90,
         "",
         va="top",
-        fontsize=9,
+        fontsize=8,
         family="monospace",
     )
 
@@ -747,27 +845,30 @@ def create_animation(
         0.25,
         "",
         va="top",
-        fontsize=9,
+        fontsize=8,
         family="monospace",
     )
 
     def update(frame_index):
         simulation_time = frame_times[frame_index]
 
+        queue_length = get_queue_length(
+            queue_times,
+            queue_lengths,
+            simulation_time,
+        )
+
         status_lines = [
             f"Scenario: {scenario_name}",
             f"Strategy: {strategy}",
             f"Time: {simulation_time:.1f}",
-            (
-                "Queue length: "
-                f"{get_queue_length(result['queue_history'], simulation_time)}"
-            ),
+            f"Queue length: {queue_length}",
             "",
         ]
 
-        for robot_id in sorted(timelines):
+        for robot_id in sorted(indexed_timelines):
             state = get_robot_state(
-                timelines[robot_id],
+                indexed_timelines[robot_id],
                 simulation_time,
             )
 
@@ -810,10 +911,9 @@ def create_animation(
             "\n".join(status_lines)
         )
 
-        completed_count = sum(
-            1
-            for task in result["tasks"]
-            if task.completion_time <= simulation_time
+        completed_count = bisect_right(
+            completion_times,
+            simulation_time,
         )
 
         summary_text.set_text(
@@ -844,7 +944,7 @@ def create_animation(
                 f"{result['summary']['scenario_name']} - {strategy}\n"
                 f"Simulation Time = {simulation_time:.1f}"
             ),
-            fontsize=14,
+            fontsize=12,
             fontweight="bold",
         )
 
@@ -864,44 +964,61 @@ def create_animation(
         interval=1000 / ANIMATION_FPS,
         blit=False,
         repeat=True,
+        cache_frame_data=False,
     )
 
-    scenario_folder = os.path.join(
-        OUTPUT_FOLDER,
-        scenario_name,
-    )
-
-    create_output_folder(
-        scenario_folder
-    )
-
-    filename = (
-        strategy.lower()
-        + "_warehouse_animation.gif"
-    )
-
-    filepath = os.path.join(
+    temporary_filepath = os.path.join(
         scenario_folder,
-        filename,
+        strategy.lower()
+        + "_warehouse_animation_temp.gif",
     )
 
-    animation.save(
-        filepath,
-        writer=PillowWriter(
-            fps=ANIMATION_FPS
-        ),
-        dpi=110,
-    )
+    if os.path.exists(temporary_filepath):
+        os.remove(temporary_filepath)
 
-    plt.close(figure)
+    save_start = time.perf_counter()
+
+    try:
+        animation.save(
+            temporary_filepath,
+            writer=PillowWriter(
+                fps=ANIMATION_FPS
+            ),
+            dpi=ANIMATION_DPI,
+        )
+
+        if not is_valid_gif(temporary_filepath):
+            raise RuntimeError(
+                "Animation generation produced an invalid GIF."
+            )
+
+        os.replace(
+            temporary_filepath,
+            filepath,
+        )
+
+    finally:
+        if os.path.exists(temporary_filepath):
+            os.remove(temporary_filepath)
+
+        plt.close(figure)
+
+    duration = time.perf_counter() - save_start
 
     print(
         f"Generated: {filepath}"
     )
 
+    print(
+        f"Animation generation time: "
+        f"{duration:.2f} seconds"
+    )
+
+    return filepath
+
 
 # =========================================================
-# 12. MAIN
+# 13. MAIN
 # =========================================================
 
 def main():
