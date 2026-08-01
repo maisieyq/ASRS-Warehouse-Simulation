@@ -15,8 +15,10 @@ from scenarios import list_scenarios, get_scenario
 OUTPUT_FOLDER = "outputs"
 
 # Web-friendly rendering settings
-GRAPH_DPI = 100
-MAX_TASK_GRAPH_WIDTH = 18
+GRAPH_DPI = 120
+MAX_TASK_GRAPH_WIDTH = 30
+TASK_LABEL_LIMIT = 25
+BAR_LABEL_LIMIT = 20
 REUSE_EXISTING_GRAPHS = True
 
 
@@ -43,6 +45,44 @@ def get_results(scenario_name):
     )
 
     return fifo_result, deferred_result
+
+
+def configure_task_axis(
+    axis,
+    task_ids,
+):
+    task_count = len(task_ids)
+
+    if task_count <= TASK_LABEL_LIMIT:
+        tick_step = 1
+    elif task_count <= 50:
+        tick_step = 2
+    elif task_count <= 100:
+        tick_step = 5
+    else:
+        tick_step = 10
+
+    visible_positions = list(
+        range(
+            0,
+            task_count,
+            tick_step,
+        )
+    )
+
+    axis.set_xticks(
+        visible_positions
+    )
+
+    axis.set_xticklabels(
+        [
+            task_ids[index]
+            for index in visible_positions
+        ],
+        rotation=45,
+        ha="right",
+        fontsize=8,
+    )
 
 
 # =========================================================
@@ -248,10 +288,33 @@ def create_waiting_time_graph(
         len(task_ids)
     )
 
-    bar_width = 0.35
+    task_count = len(task_ids)
+
+    bar_width = (
+        0.35
+        if task_count <= 50
+        else 0.28
+    )
+
+    figure_width = min(
+        MAX_TASK_GRAPH_WIDTH,
+        max(
+            10,
+            task_count * 0.28,
+        ),
+    )
+
+    figure_height = (
+        7
+        if task_count > 50
+        else 6
+    )
 
     figure, axis = plt.subplots(
-        figsize=(min(MAX_TASK_GRAPH_WIDTH, max(10, len(task_ids) * 0.45)), 6)
+        figsize=(
+            figure_width,
+            figure_height,
+        )
     )
 
     fifo_bars = axis.bar(
@@ -286,12 +349,9 @@ def create_waiting_time_graph(
         "Waiting Time"
     )
 
-    axis.set_xticks(
-        list(x_positions)
-    )
-
-    axis.set_xticklabels(
-        task_ids
+    configure_task_axis(
+        axis=axis,
+        task_ids=task_ids,
     )
 
     axis.legend()
@@ -358,10 +418,33 @@ def create_completion_time_graph(
         len(task_ids)
     )
 
-    bar_width = 0.35
+    task_count = len(task_ids)
+
+    bar_width = (
+        0.35
+        if task_count <= 50
+        else 0.28
+    )
+
+    figure_width = min(
+        MAX_TASK_GRAPH_WIDTH,
+        max(
+            10,
+            task_count * 0.28,
+        ),
+    )
+
+    figure_height = (
+        7
+        if task_count > 50
+        else 6
+    )
 
     figure, axis = plt.subplots(
-        figsize=(min(MAX_TASK_GRAPH_WIDTH, max(10, len(task_ids) * 0.45)), 6)
+        figsize=(
+            figure_width,
+            figure_height,
+        )
     )
 
     fifo_bars = axis.bar(
@@ -468,10 +551,33 @@ def create_travel_distance_graph(
         len(task_ids)
     )
 
-    bar_width = 0.35
+    task_count = len(task_ids)
+
+    bar_width = (
+        0.35
+        if task_count <= 50
+        else 0.28
+    )
+
+    figure_width = min(
+        MAX_TASK_GRAPH_WIDTH,
+        max(
+            10,
+            task_count * 0.28,
+        ),
+    )
+
+    figure_height = (
+        7
+        if task_count > 50
+        else 6
+    )
 
     figure, axis = plt.subplots(
-        figsize=(min(MAX_TASK_GRAPH_WIDTH, max(10, len(task_ids) * 0.45)), 6)
+        figsize=(
+            figure_width,
+            figure_height,
+        )
     )
 
     fifo_bars = axis.bar(

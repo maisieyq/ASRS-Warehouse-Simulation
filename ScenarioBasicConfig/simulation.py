@@ -609,12 +609,12 @@ def perform_storage_task(
     robot,
     task,
     event_log,
-    input_station=INPUT_STATION,
+    input_station,
     robot_speed=ROBOT_SPEED,
 ):
     distance_to_input = route_distance(
         robot.position,
-        INPUT_STATION,
+        input_station,
     )
 
     record_event(
@@ -633,7 +633,7 @@ def perform_storage_task(
         travel_time(distance_to_input, robot_speed)
     )
 
-    robot.position = INPUT_STATION
+    robot.position = input_station
 
     record_event(
         event_log=event_log,
@@ -662,7 +662,7 @@ def perform_storage_task(
     yield env.timeout(LOAD_TIME)
 
     distance_to_rack_access = route_distance(
-        INPUT_STATION,
+        input_station,
         task.rack_access_position,
     )
 
@@ -720,7 +720,7 @@ def perform_retrieval_task(
     robot,
     task,
     event_log,
-    output_station=OUTPUT_STATION,
+    output_station,
     robot_speed=ROBOT_SPEED,
 ):
     distance_to_rack_access = route_distance(
@@ -768,7 +768,7 @@ def perform_retrieval_task(
 
     distance_to_output = route_distance(
         task.rack_access_position,
-        OUTPUT_STATION,
+        output_station,
     )
 
     record_event(
@@ -787,7 +787,7 @@ def perform_retrieval_task(
         travel_time(distance_to_output, robot_speed)
     )
 
-    robot.position = OUTPUT_STATION
+    robot.position = output_station
 
     record_event(
         event_log=event_log,
@@ -1498,10 +1498,6 @@ def run_simulation(
     # -----------------------------------------------------
     # 6. Start the task generator
     # -----------------------------------------------------
-
-    # -----------------------------------------------------
-    # 6. Start the task generator
-    # -----------------------------------------------------
     env.process(
         task_generator(
             env=env,
@@ -1596,9 +1592,11 @@ def run_simulation(
         "queue_history": queue_history,
         "event_log": event_log,
         "scenario": scenario,
+        "warehouse": scenario["warehouse"],
         "robot_start_positions": (
             robot_start_positions
         ),
+
     }
 
 

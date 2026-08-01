@@ -14,46 +14,102 @@ def generate_rack_locations(
     warehouse_columns: int,
     rack_rows: int,
     rack_columns: int,
-) -> dict[str, tuple[int, int]]:
+) -> dict[str, tuple[float, float]]:
     if rack_rows > warehouse_rows - 2:
         raise ValueError(
-            "The requested rack rows do not fit inside the warehouse."
+            "The requested rack rows do not fit "
+            "inside the warehouse."
         )
 
     if rack_columns > warehouse_columns - 2:
         raise ValueError(
-            "The requested rack columns do not fit inside the warehouse."
+            "The requested rack columns do not fit "
+            "inside the warehouse."
         )
 
-    row_positions = [
-        round(
-            1 + index * (warehouse_rows - 3) /
-            max(rack_rows - 1, 1)
+    # Keep one coordinate unit free on each side.
+    minimum_x = 1.0
+    maximum_x = float(
+        warehouse_columns - 2
+    )
+
+    minimum_y = 1.0
+    maximum_y = float(
+        warehouse_rows - 1
+    )
+
+    # Do not use round(). Float coordinates preserve
+    # equal spacing between all rack columns and rows.
+    if rack_columns == 1:
+        column_positions = [
+            (
+                minimum_x
+                + maximum_x
+            ) / 2
+        ]
+    else:
+        column_spacing = (
+            maximum_x - minimum_x
+        ) / (
+            rack_columns - 1
         )
-        for index in range(rack_rows)
-    ]
 
-    column_positions = [
-        round(
-            1 + index * (warehouse_columns - 3) /
-            max(rack_columns - 1, 1)
-        )
-        for index in range(rack_columns)
-    ]
-
-    rack_positions: dict[str, tuple[int, int]] = {}
-
-    rack_number = 1
-
-    for row in row_positions:
-        for column in column_positions:
-            rack_positions[f"R{rack_number:02d}"] = (
-                column,
-                row,
+        column_positions = [
+            minimum_x
+            + column_index
+            * column_spacing
+            for column_index in range(
+                rack_columns
             )
-            rack_number += 1
+        ]
+
+    if rack_rows == 1:
+        row_positions = [
+            (
+                minimum_y
+                + maximum_y
+            ) / 2
+        ]
+    else:
+        row_spacing = (
+            maximum_y - minimum_y
+        ) / (
+            rack_rows - 1
+        )
+
+        row_positions = [
+            minimum_y
+            + row_index
+            * row_spacing
+            for row_index in range(
+                rack_rows
+            )
+        ]
+
+    rack_positions = {}
+
+    for row_index, row in enumerate(
+        row_positions
+    ):
+        for column_index, column in enumerate(
+            column_positions
+        ):
+            rack_letter = chr(
+                65 + column_index
+            )
+
+            rack_name = (
+                f"{rack_letter}"
+                f"{row_index + 1}"
+            )
+
+            rack_positions[rack_name] = (
+                float(column),
+                float(row),
+            )
 
     return rack_positions
+
 
 def generate_warehouse_grid(
     rows: int,
@@ -154,55 +210,45 @@ def generate_custom_tasks(
 
 def generate_robot_start_positions(
     number_of_robots: int,
-    warehouse_columns: int,
-) -> dict[int, tuple[int, int]]:
-    available_positions = [
-        (column, 0)
-        for column in range(
-            1,
-            warehouse_columns - 1,
-        )
-    ]
+    entry_point: tuple[float, float],
+    exit_point: tuple[float, float],
+) -> dict[int, tuple[float, float]]:
+    entry_x, entry_y = entry_point
+    exit_x, exit_y = exit_point
 
-    if number_of_robots > len(
-        available_positions
-    ):
+    if number_of_robots < 1:
         raise ValueError(
-            "There are too many robots for "
-            "the selected warehouse width."
+            "The warehouse must contain at least "
+            "one robot."
         )
 
-    if number_of_robots == 1:
-        selected_positions = [
-            available_positions[
-                len(available_positions) // 2
-            ]
-        ]
-    else:
-        last_index = len(
-            available_positions
-        ) - 1
+    # Divide the full distance into equal gaps:
+    #
+    # Input -> R1 -> R2 -> ... -> Output
+    #
+    # Number of gaps = number of robots + 1
+    spacing_x = (
+        exit_x - entry_x
+    ) / (
+        number_of_robots + 1
+    )
 
-        selected_positions = [
-            available_positions[
-                round(
-                    index
-                    * last_index
-                    / (number_of_robots - 1)
-                )
-            ]
-            for index in range(
-                number_of_robots
-            )
-        ]
+    spacing_y = (
+        exit_y - entry_y
+    ) / (
+        number_of_robots + 1
+    )
 
     return {
-        robot_id: selected_positions[
-            robot_id - 1
-        ]
+        robot_id: (
+            entry_x
+            + robot_id * spacing_x,
+            entry_y
+            + robot_id * spacing_y,
+        )
         for robot_id in range(
             1,
-            number_of_robots + 1,
+            number_of_robots + 1
         )
     }
 
@@ -247,7 +293,8 @@ def build_custom_scenario(
     robot_start_positions = (
         generate_robot_start_positions(
             number_of_robots=number_of_robots,
-            warehouse_columns=warehouse_columns,
+            entry_point=entry_point,
+            exit_point=exit_point
         )
     )
 

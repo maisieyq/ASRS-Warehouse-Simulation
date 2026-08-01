@@ -18,10 +18,10 @@ if str(SCENARIO_FOLDER) not in sys.path:
         str(SCENARIO_FOLDER),
     )
 
-from scenarios import SCENARIOS
-from simulation import run_simulation
-import animation as animation_engine
-import graph as graph_engine
+from ScenarioBasicConfig.scenarios import SCENARIOS
+from ScenarioBasicConfig.simulation import run_simulation
+from ScenarioBasicConfig import animation as animation_engine
+from ScenarioBasicConfig import graph as graph_engine
 
 
 OUTPUTS_FOLDER = SCENARIO_FOLDER / "outputs"
@@ -799,10 +799,24 @@ def run_and_render_dashboard(
             unsafe_allow_html=True,
         )
 
+        preview_frame = pd.DataFrame(
+            scenario["tasks"]
+        )
+
+        # Display rack positions as integers only
+        preview_frame["rack_position"] = (
+            preview_frame["rack_position"]
+            .apply(
+                lambda position: (
+                    int(round(position[0])),
+                    int(round(position[1])),
+                )
+            )
+        )
+
+
         st.dataframe(
-            pd.DataFrame(
-                scenario["tasks"]
-            ).head(20),
+            preview_frame,
             use_container_width=True,
             hide_index=True,
         )

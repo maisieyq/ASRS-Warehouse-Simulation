@@ -32,18 +32,18 @@ OUTPUT_FOLDER = "outputs"
 
 SELECTED_SCENARIO = "retrieval_dominant"  # Options: "baseline", "high_demand", "low_availability", "high_availability", "storage_dominant", "retrieval_dominant"
 
-FRAME_STEP = 2.0
-ANIMATION_FPS = 5
-ANIMATION_DPI = 75
-FIGURE_SIZE = (10, 6)
+FRAME_STEP = 1.0
+ANIMATION_FPS = 4
+ANIMATION_DPI = 100
+FIGURE_SIZE = (12, 8)
 
-GRID_MIN_X = -0.5
-GRID_MAX_X = 8.5
+#GRID_MIN_X = -0.5
+#GRID_MAX_X = 8.5
 
-GRID_MIN_Y = -0.8
-GRID_MAX_Y = 7.0
+#GRID_MIN_Y = -0.8
+#GRID_MAX_Y = 7.0
 
-GRID_STEP = 0.5
+#GRID_STEP = 0.5
 
 
 # =========================================================
@@ -158,7 +158,7 @@ def append_travel_segments(
 # 5. BUILD ROBOT TIMELINES
 # =========================================================
 
-def build_robot_timelines(result):
+def build_robot_timelines(result,entry_point, exit_point):
     makespan = result["summary"]["makespan"]
 
     timelines = {}
@@ -197,7 +197,7 @@ def build_robot_timelines(result):
                     segments=segments,
                     current_time=current_time,
                     current_position=current_position,
-                    target_position=INPUT_STATION,
+                    target_position=entry_point,
                     status="Moving to input",
                     task=task,
                 )
@@ -270,7 +270,7 @@ def build_robot_timelines(result):
                     segments=segments,
                     current_time=current_time,
                     current_position=current_position,
-                    target_position=OUTPUT_STATION,
+                    target_position=exit_point,
                     status="Moving to output",
                     task=task,
                 )
@@ -455,93 +455,199 @@ def _grid_ticks(minimum, maximum, step):
 
     return ticks
 
-
 # =========================================================
 # 10. DRAW WAREHOUSE
 # =========================================================
 
 def draw_warehouse(
     axis,
+    warehouse_rows,
+    warehouse_columns,
+    rack_positions,
+    entry_point,
+    exit_point,
     robot_start_positions,
 ):
-    axis.set_xlim(
-        GRID_MIN_X,
-        GRID_MAX_X,
-    )
+    warehouse_rows = int(warehouse_rows)
+    warehouse_columns = int(warehouse_columns)
 
-    axis.set_ylim(
-        GRID_MIN_Y,
-        GRID_MAX_Y,
-    )
+    entry_point = tuple(entry_point)
+    exit_point = tuple(exit_point)
 
-    axis.set_xticks(
-        _grid_ticks(
-            GRID_MIN_X,
-            GRID_MAX_X,
-            GRID_STEP,
-        )
-    )
+    # warehouse display limits and ticks
+    axis.set_xlim(-0.6, warehouse_columns - 0.4)
+    axis.set_ylim(-0.6, warehouse_rows - 0.1)
 
-    axis.set_yticks(
-        _grid_ticks(
-            GRID_MIN_Y,
-            GRID_MAX_Y,
-            GRID_STEP,
-        )
-    )
+    axis.set_xticks(range(warehouse_columns))
+    axis.set_yticks(range(warehouse_rows))
 
-    axis.tick_params(
-        labelsize=7,
-    )
+    axis.tick_params(labelsize=7,)
+    axis.set_aspect("equal", adjustable="box")
+    axis.grid(True, alpha=0.18, linewidth=0.6, zorder=0,)
 
-    axis.set_aspect(
-        "equal",
-        adjustable="box",
-    )
-
-    axis.grid(
-        True,
-        alpha=0.18,
-        linewidth=0.6,
-    )
-
-    axis.set_xlabel(
-        "Warehouse X Coordinate"
-    )
-
-    axis.set_ylabel(
-        "Warehouse Y Coordinate"
-    )
+    axis.set_xlabel("Warehouse X Coordinate")
+    axis.set_ylabel("Warehouse Y Coordinate")
 
     # -----------------------------------------------------
-    # Long rack columns: Rack A, B, C, D
-    # Each rack column contains zones 1, 2, 3.
+    # Group racks by X coordinate
     # -----------------------------------------------------
-    rack_columns = {
-        "A": 1,
-        "B": 3,
-        "C": 5,
-        "D": 7,
-    }
+    rack_columns = {}
 
-    zone_y_positions = {
-        "1": 6,
-        "2": 4,
-        "3": 2,
-    }
+    for rack_name, position in rack_positions.items():
+        rack_x = float(position[0])
+        rack_y = float(position[1])
 
-    rack_width = 0.70
-    rack_bottom = 1.55
-    rack_height = 4.90
+        rack_columns.setdefault(
+            rack_x,
+            []
+        ).append(
+            {
+                "name": str(rack_name),
+                "x": rack_x,
+                "y": rack_y,
+            }
+        )
 
-    for rack_letter, rack_x in rack_columns.items():
-        rack_column = Rectangle(
+
+    # -----------------------------------------------------
+    # Resolve rack layout information
+    # -----------------------------------------------------
+    sorted_column_x = sorted(
+        rack_columns.keys()
+    )
+
+    rack_column_count = len(
+        sorted_column_x
+    )
+
+    rack_row_count = max(
+        (
+            len(column_racks)
+            for column_racks in rack_columns.values()
+        ),
+        default=1,
+    )
+
+
+    # -----------------------------------------------------
+    # Calculate rack dimensions from warehouse layout
+    # -----------------------------------------------------
+    usable_warehouse_width = max(
+        1.0,
+        warehouse_columns - 2.0,
+    )
+
+    usable_warehouse_height = max(
+        1.0,
+        warehouse_rows - 2.0,
+    )
+
+    # Each rack column receives part of the available width.
+    column_slot_width = (
+        usable_warehouse_width
+        / max(rack_column_count, 1)
+    )
+
+    # Each rack section receives part of the available height.
+    row_slot_height = (
+        usable_warehouse_height
+        / max(rack_row_count, 1)
+    )
+
+    # Keep visible aisle space between rack columns.
+    rack_width = (
+        column_slot_width * 0.45
+    )
+
+    # Make rack cells fill most of the vertical slot.
+    rack_section_height = (
+        row_slot_height * 0.82
+    )
+
+    # Prevent extreme rack sizes.
+    rack_width = max(
+        0.30,
+        min(
+            rack_width,
+            1.20,
+        ),
+    )
+
+    rack_section_height = max(
+        0.35,
+        min(
+            rack_section_height,
+            2.00,
+        ),
+    )
+
+
+    # -----------------------------------------------------
+    # Calculate flexible text size
+    # -----------------------------------------------------
+    rack_font_size = max(
+        7,
+        min(
+            10,
+            rack_width * 10,
+            rack_section_height * 6,
+        ),
+    )
+
+    title_font_size = max(
+        8,
+        min(
+            11,
+            rack_width * 10,
+        ),
+    )
+
+
+    # -----------------------------------------------------
+    # Draw each rack column
+    # -----------------------------------------------------
+    for column_index, rack_x in enumerate(
+        sorted_column_x,
+        start=1,
+    ):
+        column_racks = sorted(
+            rack_columns[rack_x],
+            key=lambda rack: rack["y"],
+            reverse=True,
+        )
+
+        # Centre the full rack column around its rack positions.
+        y_positions = [
+            rack["y"]
+            for rack in column_racks
+        ]
+
+        top_rack_y = max(y_positions)
+        bottom_rack_y = min(y_positions)
+
+        rack_column_bottom = (
+            bottom_rack_y
+            - rack_section_height / 2
+        )
+
+        rack_column_top = (
+            top_rack_y
+            + rack_section_height / 2
+        )
+
+        rack_column_height = (
+            rack_column_top
+            - rack_column_bottom
+        )
+
+        # Draw one outer rack column.
+        rack_column_box = Rectangle(
             (
                 rack_x - rack_width / 2,
-                rack_bottom,
+                rack_column_bottom,
             ),
             rack_width,
-            rack_height,
+            rack_column_height,
             facecolor="lightsteelblue",
             edgecolor="black",
             linewidth=1.4,
@@ -549,56 +655,84 @@ def draw_warehouse(
         )
 
         axis.add_patch(
-            rack_column
+            rack_column_box
+        )
+
+        rack_column_letter = chr(
+            64 + column_index
         )
 
         axis.text(
             rack_x,
-            rack_bottom + rack_height + 0.15,
-            f"Rack {rack_letter}",
+            rack_column_top + 0.08,
+            f"Rack {rack_column_letter}",
             ha="center",
             va="bottom",
-            fontsize=9,
+            fontsize=title_font_size,
             fontweight="bold",
-            zorder=3,
+            zorder=4,
         )
 
-        for separator_y in [5, 3]:
-            axis.plot(
-                [
-                    rack_x - rack_width / 2,
-                    rack_x + rack_width / 2,
-                ],
-                [
-                    separator_y,
-                    separator_y,
-                ],
-                color="black",
-                linewidth=1.0,
-                zorder=3,
-            )
-
-        for zone_number, zone_y in zone_y_positions.items():
-            rack_name = f"{rack_letter}{zone_number}"
+        # Draw rack names and separators.
+        for rack_index, rack in enumerate(
+            column_racks
+        ):
+            rack_y = rack["y"]
 
             axis.text(
                 rack_x,
-                zone_y,
-                rack_name,
+                rack_y,
+                rack["name"],
                 ha="center",
                 va="center",
-                fontsize=9,
+                fontsize=rack_font_size,
                 fontweight="bold",
                 zorder=4,
             )
 
-    # -----------------------------------------------------
-    # Input station
-    # -----------------------------------------------------
+            if rack_index < len(column_racks) - 1:
+                current_y = rack["y"]
+
+                next_y = column_racks[
+                    rack_index + 1
+                ]["y"]
+
+                separator_y = (
+                    current_y + next_y
+                ) / 2
+
+                axis.plot(
+                    [
+                        rack_x - rack_width / 2,
+                        rack_x + rack_width / 2,
+                    ],
+                    [
+                        separator_y,
+                        separator_y,
+                    ],
+                    color="black",
+                    linewidth=1.0,
+                    zorder=3,
+                )
+        
+   
+
+    
+
+
+
+
+
+
+  
+
+    # Draw input station    
+    input_x, input_y = entry_point
+
     input_box = Rectangle(
         (
-            INPUT_STATION[0] - 0.42,
-            INPUT_STATION[1] - 0.34,
+            input_x - 0.42,
+            input_y - 0.34,
         ),
         0.84,
         0.68,
@@ -608,26 +742,29 @@ def draw_warehouse(
         zorder=2,
     )
 
-    axis.add_patch(input_box)
+    axis.add_patch(
+        input_box
+    )
 
     axis.text(
-        INPUT_STATION[0],
-        INPUT_STATION[1],
+        input_x,
+        input_y,
         "Input",
         ha="center",
         va="center",
-        fontsize=8,
+        fontsize=7,
         fontweight="bold",
         zorder=3,
     )
 
-    # -----------------------------------------------------
-    # Output station
-    # -----------------------------------------------------
+
+    # Draw output station
+    output_x, output_y = exit_point
+
     output_box = Rectangle(
         (
-            OUTPUT_STATION[0] - 0.42,
-            OUTPUT_STATION[1] - 0.34,
+            output_x - 0.42,
+            output_y - 0.34,
         ),
         0.84,
         0.68,
@@ -637,39 +774,44 @@ def draw_warehouse(
         zorder=2,
     )
 
-    axis.add_patch(output_box)
+    axis.add_patch(
+        output_box
+    )
 
     axis.text(
-        OUTPUT_STATION[0],
-        OUTPUT_STATION[1],
+        output_x,
+        output_y,
         "Output",
         ha="center",
         va="center",
-        fontsize=8,
+        fontsize=7,
         fontweight="bold",
         zorder=3,
     )
 
-    # -----------------------------------------------------
-    # Robot start points
-    # -----------------------------------------------------
-    for robot_id, position in robot_start_positions.items():
-        start_x, start_y = position
+    # Draw robot starting positions
+    for robot_id, position in sorted(
+        robot_start_positions.items()
+    ):
+        start_x = float(position[0])
+        start_y = float(position[1])
 
         start_box = Rectangle(
             (
-                start_x - 0.42,
-                start_y - 0.34,
+                start_x - 0.35,
+                start_y - 0.28,
             ),
-            0.84,
-            0.68,
+            0.70,
+            0.56,
             facecolor="lemonchiffon",
             edgecolor="black",
-            linewidth=1.2,
+            linewidth=1.0,
             zorder=2,
         )
 
-        axis.add_patch(start_box)
+        axis.add_patch(
+            start_box
+        )
 
         axis.text(
             start_x,
@@ -680,7 +822,6 @@ def draw_warehouse(
             fontsize=8,
             zorder=3,
         )
-
 
 # =========================================================
 # 11. GIF VALIDATION
@@ -704,7 +845,6 @@ def is_valid_gif(filepath):
 
 # =========================================================
 # 12. CREATE ONE ANIMATION
-
 # =========================================================
 
 def create_animation(
@@ -713,8 +853,69 @@ def create_animation(
     result,
     force_rebuild=False,
 ):
+
+    scenario = result.get(
+        "scenario",
+        {}
+    )
+
+    warehouse = scenario.get(
+        "warehouse",
+        {}
+    )
+
+    # Use the configured warehouse for custom scenarios.
+    # Fall back to the original layout for predefined scenarios.
+    warehouse_rows = int(
+        warehouse.get(
+            "rows",
+            7,
+        )
+    )
+
+    warehouse_columns = int(
+        warehouse.get(
+            "columns",
+            9,
+        )
+    )
+
+    rack_positions = warehouse.get(
+        "rack_positions",
+        {
+            "A1": (1, 6),
+            "A2": (1, 4),
+            "A3": (1, 2),
+            "B1": (3, 6),
+            "B2": (3, 4),
+            "B3": (3, 2),
+            "C1": (5, 6),
+            "C2": (5, 4),
+            "C3": (5, 2),
+            "D1": (7, 6),
+            "D2": (7, 4),
+            "D3": (7, 2),
+        },
+    )
+
+    entry_point = tuple(
+        warehouse.get(
+            "entry_point",
+            INPUT_STATION,
+        )
+    )
+
+    exit_point = tuple(
+        warehouse.get(
+            "exit_point",
+            OUTPUT_STATION,
+        )
+    )
+
     timelines = build_robot_timelines(
-        result
+        result,
+        entry_point=entry_point,
+        exit_point=exit_point,
     )
 
     indexed_timelines = {
@@ -736,6 +937,9 @@ def create_animation(
     robot_start_positions = dict(
         result["robot_start_positions"]
     )
+
+
+
 
     # Add any backup/replacement robots created during simulation.
     for robot in result["robots"]:
@@ -804,10 +1008,16 @@ def create_animation(
     figure.subplots_adjust(
         right=0.72
     )
-
+    
+    
     draw_warehouse(
-        axis,
-        robot_start_positions,
+        axis=axis,
+        warehouse_rows=warehouse_rows,
+        warehouse_columns=warehouse_columns,
+        rack_positions=rack_positions,
+        entry_point=entry_point,
+        exit_point=exit_point,
+        robot_start_positions=robot_start_positions,
     )
 
     robot_markers = {}
@@ -819,7 +1029,7 @@ def create_animation(
         marker = axis.scatter(
             start_position[0],
             start_position[1],
-            s=120,
+            s=180,
             marker="o",
             zorder=5,
             label=f"Robot {robot_id}",
