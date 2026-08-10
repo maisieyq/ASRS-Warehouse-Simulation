@@ -32,10 +32,13 @@ OUTPUT_FOLDER = "outputs"
 
 SELECTED_SCENARIO = "retrieval_dominant"  # Options: "baseline", "high_demand", "low_availability", "high_availability", "storage_dominant", "retrieval_dominant"
 
-FRAME_STEP = 1.0
-ANIMATION_FPS = 4
-ANIMATION_DPI = 100
-FIGURE_SIZE = (12, 8)
+FRAME_STEP = 1 #need to reduce robot speed
+ANIMATION_FPS = 8
+ANIMATION_DPI = 85
+FIGURE_SIZE = (10, 6.5)
+
+# Do not generate thousands of frames for long simulations.
+MAX_ANIMATION_FRAMES = 300
 
 #GRID_MIN_X = -0.5
 #GRID_MAX_X = 8.5
@@ -852,7 +855,11 @@ def create_animation(
     scenario_name,
     result,
     force_rebuild=False,
+    output_folder=None,
 ):
+
+    if output_folder is None:
+        output_folder = OUTPUT_FOLDER
 
     scenario = result.get(
         "scenario",
@@ -949,7 +956,7 @@ def create_animation(
             ] = robot.starting_position
 
     scenario_folder = os.path.join(
-        OUTPUT_FOLDER,
+        output_folder,
         scenario_name,
     )
 
@@ -980,19 +987,33 @@ def create_animation(
     if os.path.exists(filepath):
         os.remove(filepath)
 
-    frame_times = []
+    # =====================================================
+    # Generate a limited number of animation frames
+    # =====================================================
 
-    current_time = 0.0
+    if makespan <= 0:
+        frame_times = [0.0]
+    else:
+        frame_count = min(
+            MAX_ANIMATION_FRAMES,
+            max(
+                2,
+                int(makespan) + 1,
+            ),
+        )
 
-    while current_time <= makespan:
-        frame_times.append(current_time)
-        current_time += FRAME_STEP
+        frame_step = (
+            makespan
+            / (frame_count - 1)
+        )
 
-    if (
-        not frame_times
-        or frame_times[-1] < makespan
-    ):
-        frame_times.append(makespan)
+        frame_times = [
+            index * frame_step
+            for index in range(frame_count)
+        ]
+
+        # Make sure final frame is exactly the makespan
+        frame_times[-1] = makespan
 
     print(
         f"Generating {len(frame_times)} frames "
@@ -1006,8 +1027,21 @@ def create_animation(
     )
 
     figure.subplots_adjust(
-        right=0.72
+        right=0.70
     )
+
+    info_axis = figure.add_axes(
+        [
+            0.72,
+            0.08,
+            0.27,
+            0.84,
+        ]
+    )
+
+    info_axis.set_xlim(0, 1)
+    info_axis.set_ylim(0, 1)
+    info_axis.axis("off")
     
     
     draw_warehouse(
@@ -1048,24 +1082,33 @@ def create_animation(
         robot_markers[robot_id] = marker
         robot_labels[robot_id] = label
 
-    status_text = figure.text(
-        0.74,
-        0.90,
+    status_text = info_axis.text(
+        0.0,
+        1.0,
         "",
+        transform=info_axis.transAxes,
+        ha="left",
         va="top",
         fontsize=8,
         family="monospace",
     )
 
-    summary_text = figure.text(
-        0.74,
-        0.25,
+    summary_text = info_axis.text(
+        0.0,
+        0.28,
         "",
+        transform=info_axis.transAxes,
+        ha="left",
         va="top",
         fontsize=8,
         family="monospace",
+)
+    title_text = axis.set_title(
+        "",
+        fontsize=12,
+        fontweight="bold",
     )
-
+    
     def update(frame_index):
         simulation_time = frame_times[frame_index]
 
@@ -1116,11 +1159,14 @@ def create_animation(
 
             status_lines.extend(
                 [
-                    f"Robot {robot_id}",
-                    f"  Status: {state['status']}",
-                    f"  Task: {task_text}",
-                    f"  Rack: {rack_text}",
-                    "",
+                    (
+                        f"Robot {robot_id}: "
+                        f"{state['status']}"
+                    ),
+                    (
+                        f"  Task {task_text} | "
+                        f"Rack {rack_text}"
+                    ),
                 ]
             )
 
@@ -1156,13 +1202,11 @@ def create_animation(
             )
         )
 
-        axis.set_title(
+        title_text.set_text(
             (
                 f"{result['summary']['scenario_name']} - {strategy}\n"
                 f"Simulation Time = {simulation_time:.1f}"
-            ),
-            fontsize=12,
-            fontweight="bold",
+            )
         )
 
         return (
@@ -1171,6 +1215,7 @@ def create_animation(
             + [
                 status_text,
                 summary_text,
+                title_text,
             ]
         )
 
@@ -1179,7 +1224,7 @@ def create_animation(
         update,
         frames=len(frame_times),
         interval=1000 / ANIMATION_FPS,
-        blit=False,
+        blit=True,
         repeat=True,
         cache_frame_data=False,
     )

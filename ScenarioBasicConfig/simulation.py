@@ -1592,7 +1592,16 @@ def run_simulation(
         "queue_history": queue_history,
         "event_log": event_log,
         "scenario": scenario,
-        "warehouse": scenario["warehouse"],
+        "warehouse": scenario.get(
+            "warehouse",
+            {
+                "rows":7,
+                "columns":9,
+                "rack_positions": RACK_POSITIONS,
+                "entry_point": INPUT_STATION,
+                "exit_point": OUTPUT_STATION,
+            },
+        ),
         "robot_start_positions": (
             robot_start_positions
         ),

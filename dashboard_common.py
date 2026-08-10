@@ -286,24 +286,14 @@ def get_or_build_animation(
     )
 
     if not cache_path.exists():
-        original_output_folder = (
-            animation_engine.OUTPUT_FOLDER
+        animation_engine.create_animation(
+            strategy=strategy.upper(),
+            scenario_name=scenario_key,
+            result=result,
+            output_folder=str(
+                ANIMATION_CACHE_FOLDER
+            ),
         )
-
-        animation_engine.OUTPUT_FOLDER = str(
-            ANIMATION_CACHE_FOLDER
-        )
-
-        try:
-            animation_engine.create_animation(
-                strategy=strategy.upper(),
-                scenario_name=scenario_key,
-                result=result,
-            )
-        finally:
-            animation_engine.OUTPUT_FOLDER = (
-                original_output_folder
-            )
 
     return cache_path
 
@@ -451,7 +441,7 @@ def _render_animations(
             "DEFERRED",
             deferred_result,
         )
-
+        
     with left:
         st.markdown(
             """
