@@ -248,7 +248,7 @@ def shipped_animation_path(
         / scenario_key
         / (
             f"{strategy.lower()}"
-            "_warehouse_animation.gif"
+            "_warehouse_animation.mp4"
         )
     )
 
@@ -262,7 +262,7 @@ def cached_animation_path(
         / scenario_key
         / (
             f"{strategy.lower()}"
-            "_warehouse_animation.gif"
+            "_warehouse_animation.mp4"
         )
     )
 
@@ -452,9 +452,8 @@ def _render_animations(
             unsafe_allow_html=True,
         )
 
-        st.image(
+        st.video(
             str(fifo_path),
-            use_container_width=True,
         )
 
     with right:
@@ -469,9 +468,8 @@ def _render_animations(
             unsafe_allow_html=True,
         )
 
-        st.image(
+        st.video(
             str(deferred_path),
-            use_container_width=True,
         )
 
 def generate_graph_files(

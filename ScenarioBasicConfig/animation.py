@@ -4,9 +4,9 @@ from bisect import bisect_right
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation, PillowWriter
+from matplotlib.animation import FuncAnimation, FFMpegWriter
 from matplotlib.patches import Rectangle
-from PIL import Image
+
 
 from simulation import (
     run_simulation,
@@ -32,21 +32,12 @@ OUTPUT_FOLDER = "outputs"
 
 SELECTED_SCENARIO = "retrieval_dominant"  # Options: "baseline", "high_demand", "low_availability", "high_availability", "storage_dominant", "retrieval_dominant"
 
-FRAME_STEP = 1 #need to reduce robot speed
-ANIMATION_FPS = 8
+ANIMATION_FPS = 5
 ANIMATION_DPI = 85
 FIGURE_SIZE = (10, 6.5)
 
 # Do not generate thousands of frames for long simulations.
 MAX_ANIMATION_FRAMES = 300
-
-#GRID_MIN_X = -0.5
-#GRID_MAX_X = 8.5
-
-#GRID_MIN_Y = -0.8
-#GRID_MAX_Y = 7.0
-
-#GRID_STEP = 0.5
 
 
 # =========================================================
@@ -830,20 +821,14 @@ def draw_warehouse(
 # 11. GIF VALIDATION
 # =========================================================
 
-def is_valid_gif(filepath):
+def is_valid_mp4(filepath):
     path = Path(filepath)
 
-    if not path.exists() or path.stat().st_size == 0:
-        return False
-
-    try:
-        with Image.open(path) as image:
-            image.verify()
-
-        return True
-
-    except Exception:
-        return False
+    return (
+        path.exists()
+        and path.is_file()
+        and path.stat().st_size > 0
+    )
 
 
 # =========================================================
@@ -857,6 +842,7 @@ def create_animation(
     force_rebuild=False,
     output_folder=None,
 ):
+    total_start = time.perf_counter()
 
     if output_folder is None:
         output_folder = OUTPUT_FOLDER
@@ -919,11 +905,26 @@ def create_animation(
         )
     )
 
+    timeline_start = time.perf_counter()
+
     timelines = build_robot_timelines(
         result,
         entry_point=entry_point,
         exit_point=exit_point,
     )
+
+    timeline_duration = (
+        time.perf_counter()
+        - timeline_start
+    )
+
+    print(
+        f"[{strategy}] "
+        f"Timeline build time: "
+        f"{timeline_duration:.2f} seconds"
+    )
+
+    data_prepare_start = time.perf_counter()
 
     indexed_timelines = {
         robot_id: prepare_timeline_index(timeline)
@@ -937,6 +938,17 @@ def create_animation(
     completion_times = sorted(
         task.completion_time
         for task in result["tasks"]
+    )
+
+    data_prepare_duration = (
+        time.perf_counter()
+        - data_prepare_start
+    )
+
+    print(
+        f"[{strategy}] "
+        f"Animation data preparation time: "
+        f"{data_prepare_duration:.2f} seconds"
     )
 
     makespan = result["summary"]["makespan"]
@@ -966,7 +978,7 @@ def create_animation(
 
     filename = (
         strategy.lower()
-        + "_warehouse_animation.gif"
+        + "_warehouse_animation.mp4"
     )
 
     filepath = os.path.join(
@@ -974,10 +986,10 @@ def create_animation(
         filename,
     )
 
-    # Reuse a valid existing GIF unless a rebuild is requested.
+    # Reuse a valid existing MP4 unless a rebuild is requested.
     if (
         not force_rebuild
-        and is_valid_gif(filepath)
+        and is_valid_mp4(filepath)
     ):
         print(
             f"Using existing animation: {filepath}"
@@ -990,6 +1002,7 @@ def create_animation(
     # =====================================================
     # Generate a limited number of animation frames
     # =====================================================
+    frame_prepare_start = time.perf_counter()
 
     if makespan <= 0:
         frame_times = [0.0]
@@ -1015,11 +1028,25 @@ def create_animation(
         # Make sure final frame is exactly the makespan
         frame_times[-1] = makespan
 
-    print(
-        f"Generating {len(frame_times)} frames "
-        f"for {strategy}..."
+    
+    frame_prepare_duration = (
+        time.perf_counter()
+        - frame_prepare_start
     )
 
+    print(
+        f"[{strategy}] "
+        f"Frame preparation time: "
+        f"{frame_prepare_duration:.2f} seconds"
+    )
+
+    print(
+        f"[{strategy}] "
+        f"Number of frames: "
+        f"{len(frame_times)}"
+    )
+
+    figure_start = time.perf_counter()
     figure, axis = plt.subplots(
         figsize=FIGURE_SIZE,
         dpi=ANIMATION_DPI,
@@ -1107,6 +1134,17 @@ def create_animation(
         "",
         fontsize=12,
         fontweight="bold",
+    )
+
+    figure_duration = (
+        time.perf_counter()
+        - figure_start
+    )
+
+    print(
+        f"[{strategy}] "
+        f"Figure setup time: "
+        f"{figure_duration:.2f} seconds"
     )
     
     def update(frame_index):
@@ -1232,7 +1270,7 @@ def create_animation(
     temporary_filepath = os.path.join(
         scenario_folder,
         strategy.lower()
-        + "_warehouse_animation_temp.gif",
+        + "_warehouse_animation_temp.mp4",
     )
 
     if os.path.exists(temporary_filepath):
@@ -1240,18 +1278,31 @@ def create_animation(
 
     save_start = time.perf_counter()
 
+
     try:
+        writer = FFMpegWriter(
+            fps=ANIMATION_FPS,
+            codec="libx264",
+            extra_args=[
+                "-preset",
+                "ultrafast",  #very fast, faster, fast, medium, slow, slower, veryslow
+                "-pix_fmt",
+                "yuv420p",
+            ],
+        )
+
         animation.save(
             temporary_filepath,
-            writer=PillowWriter(
-                fps=ANIMATION_FPS
-            ),
+            writer=writer,
             dpi=ANIMATION_DPI,
         )
 
-        if not is_valid_gif(temporary_filepath):
+        if not is_valid_mp4(
+            temporary_filepath
+        ):
             raise RuntimeError(
-                "Animation generation produced an invalid GIF."
+                "Animation generation produced "
+                "an invalid video."
             )
 
         os.replace(
@@ -1265,16 +1316,30 @@ def create_animation(
 
         plt.close(figure)
 
-    duration = time.perf_counter() - save_start
+    save_duration = time.perf_counter() - save_start
 
     print(
         f"Generated: {filepath}"
     )
 
     print(
-        f"Animation generation time: "
-        f"{duration:.2f} seconds"
+        f"[{strategy}] "
+        f"Video rendering + encoding time: "
+        f"{save_duration:.2f} seconds"
     )
+
+    total_duration = (
+        time.perf_counter()
+        - total_start
+    )
+
+    print()
+    print(
+        f"[{strategy}] "
+        f"TOTAL animation generation time: "
+        f"{total_duration:.2f} seconds"
+    )
+    print("-" * 60)
 
     return filepath
 
