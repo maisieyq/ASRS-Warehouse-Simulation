@@ -1,9 +1,15 @@
 import os
+import time
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from simulation import run_simulation
-from scenarios import list_scenarios, get_scenario
+try:
+    from .simulation import run_simulation
+    from .scenarios import list_scenarios, get_scenario
+except ImportError:
+    from simulation import run_simulation
+    from scenarios import list_scenarios, get_scenario
 
 
 # =========================================================
@@ -11,6 +17,19 @@ from scenarios import list_scenarios, get_scenario
 # =========================================================
 
 OUTPUT_FOLDER = "outputs"
+
+# Web-friendly rendering settings
+GRAPH_DPI = 120
+
+# Increment this when graph layout/rendering rules change.
+# dashboard_common.py includes this version in the graph cache path,
+# so old graph files are not reused after a visual logic update.
+GRAPH_RENDER_VERSION = "v6_clean_difference_title"
+
+# Task graph readability thresholds.
+TASK_DETAILED_LIMIT = 25
+TASK_BAR_LIMIT = 50
+REUSE_EXISTING_GRAPHS = True
 
 
 def create_output_folder(folder_path):
@@ -38,6 +57,66 @@ def get_results(scenario_name):
     return fifo_result, deferred_result
 
 
+def configure_task_axis(
+    axis,
+    task_ids,
+):
+    """
+    Keep task identifiers readable as task volume grows.
+
+    <= 25 tasks: show every task.
+    26-50 tasks: show roughly every 5th task.
+    > 50 tasks: show roughly every 10th task.
+    """
+    task_count = len(task_ids)
+
+    if task_count <= TASK_DETAILED_LIMIT:
+        tick_step = 1
+    elif task_count <= TASK_BAR_LIMIT:
+        tick_step = 5
+    else:
+        tick_step = 10
+
+    visible_positions = list(
+        range(
+            0,
+            task_count,
+            tick_step,
+        )
+    )
+
+    # Always include the final task so the displayed range is obvious.
+    if (
+        task_count > 0
+        and (task_count - 1) not in visible_positions
+    ):
+        visible_positions.append(
+            task_count - 1
+        )
+
+    axis.set_xticks(
+        visible_positions
+    )
+
+    axis.set_xticklabels(
+        [
+            task_ids[index]
+            for index in visible_positions
+        ],
+        rotation=(
+            45
+            if task_count <= TASK_DETAILED_LIMIT
+            else 0
+        ),
+        ha=(
+            "right"
+            if task_count <= TASK_DETAILED_LIMIT
+            else "center"
+        ),
+        fontsize=8,
+    )
+
+
 # =========================================================
 # 3. SAVE FIGURE
 # =========================================================
@@ -46,25 +125,52 @@ def save_figure(
     figure,
     folder_path,
     filename,
+    force_rebuild=False,
 ):
     filepath = os.path.join(
         folder_path,
         filename,
     )
 
+    path = Path(filepath)
+
+    if (
+        REUSE_EXISTING_GRAPHS
+        and not force_rebuild
+        and path.exists()
+        and path.stat().st_size > 0
+    ):
+        plt.close(figure)
+
+        print(
+            f"Using existing graph: {filepath}"
+        )
+
+        return filepath
+
+    start_time = time.perf_counter()
+
     figure.tight_layout()
 
     figure.savefig(
         filepath,
-        dpi=300,
-        bbox_inches="tight",
+        dpi=GRAPH_DPI,
     )
 
     plt.close(figure)
 
+    elapsed = time.perf_counter() - start_time
+
     print(
         f"Generated: {filepath}"
     )
+
+    print(
+        f"Graph generation time: "
+        f"{elapsed:.2f} seconds"
+    )
+
+    return filepath
 
 
 # =========================================================
@@ -107,7 +213,7 @@ def create_main_metrics_graph(
     bar_width = 0.35
 
     figure, axis = plt.subplots(
-        figsize=(10, 6)
+        figsize=(9, 5.5)
     )
 
     fifo_bars = axis.bar(
@@ -177,332 +283,394 @@ def create_main_metrics_graph(
 
 
 # =========================================================
-# 5. WAITING TIME BY TASK
+# 5-7. ADAPTIVE TASK-LEVEL GRAPHS
 # =========================================================
+
+def _filter_tasks_by_id(
+    result,
+    selected_task_ids=None,
+):
+    tasks = sorted(
+        result["tasks"],
+        key=lambda task: task.task_id,
+    )
+
+    if selected_task_ids is None:
+        return tasks
+
+    selected_set = set(
+        selected_task_ids
+    )
+
+    return [
+        task
+        for task in tasks
+        if task.task_id in selected_set
+    ]
+
+
+def _create_task_comparison_graph(
+    fifo_result,
+    deferred_result,
+    folder_path,
+    value_getter,
+    title_suffix,
+    y_label,
+    filename,
+    selected_task_ids=None,
+    difference_overview=False,
+    view_label=None,
+):
+    """
+    Render a task-level comparison that adapts to the selected view.
+
+    Detailed range:
+        FIFO and Deferred are displayed side-by-side.
+        Up to 25 selected tasks receive exact value labels.
+
+    All-task overview for a large configuration:
+        A single difference series is displayed:
+            Deferred - FIFO
+
+        Negative value:
+            Deferred Commitment achieved a lower metric value.
+
+        Positive value:
+            FIFO achieved a lower metric value.
+
+    This avoids asking the user to visually pair two separate points for
+    every task in a 100-task configuration.
+    """
+    fifo_tasks = _filter_tasks_by_id(
+        fifo_result,
+        selected_task_ids,
+    )
+
+    deferred_tasks = _filter_tasks_by_id(
+        deferred_result,
+        selected_task_ids,
+    )
+
+    fifo_by_id = {
+        task.task_id: task
+        for task in fifo_tasks
+    }
+
+    deferred_by_id = {
+        task.task_id: task
+        for task in deferred_tasks
+    }
+
+    task_ids = sorted(
+        set(fifo_by_id)
+        & set(deferred_by_id)
+    )
+
+    if not task_ids:
+        raise ValueError(
+            "No matching FIFO and Deferred tasks "
+            "were found for the selected task view."
+        )
+
+    fifo_values = [
+        float(
+            value_getter(
+                fifo_by_id[task_id]
+            )
+        )
+        for task_id in task_ids
+    ]
+
+    deferred_values = [
+        float(
+            value_getter(
+                deferred_by_id[task_id]
+            )
+        )
+        for task_id in task_ids
+    ]
+
+    task_count = len(task_ids)
+    x_positions = list(
+        range(task_count)
+    )
+
+    figure_size = (
+        (13.5, 6.5)
+        if difference_overview
+        else (
+            (11.5, 6.0)
+            if task_count <= TASK_DETAILED_LIMIT
+            else (12.5, 6.0)
+        )
+    )
+
+    figure, axis = plt.subplots(
+        figsize=figure_size
+    )
+
+    scenario_name = (
+        fifo_result["summary"][
+            "scenario_name"
+        ]
+    )
+
+    view_suffix = (
+        f" ({view_label})"
+        if view_label
+        else ""
+    )
+
+    if difference_overview:
+        differences = [
+            deferred_value
+            - fifo_value
+            for fifo_value, deferred_value
+            in zip(
+                fifo_values,
+                deferred_values,
+            )
+        ]
+
+        tolerance = 1e-9
+
+        deferred_better_count = sum(
+            1
+            for value in differences
+            if value < -tolerance
+        )
+
+        fifo_better_count = sum(
+            1
+            for value in differences
+            if value > tolerance
+        )
+
+        equal_count = (
+            len(differences)
+            - deferred_better_count
+            - fifo_better_count
+        )
+
+        axis.scatter(
+            x_positions,
+            differences,
+            s=34,
+            alpha=0.85,
+        )
+
+        axis.axhline(
+            0.0,
+            linewidth=1.2,
+            linestyle="--",
+        )
+
+        summary_text = (
+            f"Deferred lower: {deferred_better_count} tasks"
+            f"   |   FIFO lower: {fifo_better_count} tasks"
+            f"   |   Equal: {equal_count} tasks"
+        )
+
+        # Use one controlled multiline title instead of placing a second
+        # text object above the axes. This prevents the summary from
+        # overlapping the chart title in wide/full-width dashboard views.
+        axis.set_title(
+            f"{scenario_name}: {title_suffix}\n"
+            f"Difference = Deferred Commitment - FIFO\n"
+            f"{summary_text}",
+            fontsize=11,
+            pad=12,
+        )
+
+        axis.set_ylabel(
+            f"{y_label} Difference"
+        )
+
+        # Make the interpretation explicit inside the graph so a
+        # first-time viewer does not need to infer the sign convention.
+        axis.text(
+            0.015,
+            0.965,
+            "Positive = FIFO better",
+            transform=axis.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+            fontweight="bold",
+        )
+
+        axis.text(
+            0.015,
+            0.035,
+            "Negative = Deferred Commitment better",
+            transform=axis.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=9,
+            fontweight="bold",
+        )
+
+        axis.text(
+            0.985,
+            0.505,
+            "Equal",
+            transform=axis.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=8,
+        )
+
+
+    else:
+        bar_width = 0.36
+
+        fifo_artists = axis.bar(
+            [
+                x - bar_width / 2
+                for x in x_positions
+            ],
+            fifo_values,
+            width=bar_width,
+            label="FIFO",
+        )
+
+        deferred_artists = axis.bar(
+            [
+                x + bar_width / 2
+                for x in x_positions
+            ],
+            deferred_values,
+            width=bar_width,
+            label="Deferred Commitment",
+        )
+
+        if task_count <= TASK_DETAILED_LIMIT:
+            axis.bar_label(
+                fifo_artists,
+                fmt="%.1f",
+                padding=3,
+                fontsize=8,
+            )
+
+            axis.bar_label(
+                deferred_artists,
+                fmt="%.1f",
+                padding=3,
+                fontsize=8,
+            )
+
+        axis.set_title(
+            f"{scenario_name}: "
+            f"{title_suffix}"
+            f"{view_suffix}"
+        )
+
+        axis.set_ylabel(
+            y_label
+        )
+
+        axis.legend()
+
+    axis.set_xlabel(
+        "Task"
+    )
+
+    configure_task_axis(
+        axis=axis,
+        task_ids=task_ids,
+    )
+
+    axis.grid(
+        axis="y",
+        alpha=0.3,
+    )
+
+    axis.margins(
+        x=0.01
+    )
+
+    save_figure(
+        figure,
+        folder_path,
+        filename,
+    )
+
 
 def create_waiting_time_graph(
     fifo_result,
     deferred_result,
     folder_path,
+    selected_task_ids=None,
+    difference_overview=False,
+    view_label=None,
 ):
-    fifo_tasks = sorted(
-        fifo_result["tasks"],
-        key=lambda task: task.task_id,
+    _create_task_comparison_graph(
+        fifo_result=fifo_result,
+        deferred_result=deferred_result,
+        folder_path=folder_path,
+        value_getter=(
+            lambda task: task.waiting_time()
+        ),
+        title_suffix="Task Waiting Time",
+        y_label="Waiting Time",
+        filename="task_waiting_time.png",
+        selected_task_ids=selected_task_ids,
+        difference_overview=(
+            difference_overview
+        ),
+        view_label=view_label,
     )
 
-    deferred_tasks = sorted(
-        deferred_result["tasks"],
-        key=lambda task: task.task_id,
-    )
-
-    task_ids = [
-        task.task_id
-        for task in fifo_tasks
-    ]
-
-    fifo_values = [
-        task.waiting_time()
-        for task in fifo_tasks
-    ]
-
-    deferred_values = [
-        task.waiting_time()
-        for task in deferred_tasks
-    ]
-
-    x_positions = range(
-        len(task_ids)
-    )
-
-    bar_width = 0.35
-
-    figure, axis = plt.subplots(
-        figsize=(max(10, len(task_ids) * 0.8), 6)
-    )
-
-    fifo_bars = axis.bar(
-        [
-            x - bar_width / 2
-            for x in x_positions
-        ],
-        fifo_values,
-        width=bar_width,
-        label="FIFO",
-    )
-
-    deferred_bars = axis.bar(
-        [
-            x + bar_width / 2
-            for x in x_positions
-        ],
-        deferred_values,
-        width=bar_width,
-        label="Deferred Commitment",
-    )
-
-    axis.set_title(
-        f"{fifo_result['summary']['scenario_name']}: Task Waiting Time"
-    )
-
-    axis.set_xlabel(
-        "Task"
-    )
-
-    axis.set_ylabel(
-        "Waiting Time"
-    )
-
-    axis.set_xticks(
-        list(x_positions)
-    )
-
-    axis.set_xticklabels(
-        task_ids
-    )
-
-    axis.legend()
-
-    axis.grid(
-        axis="y",
-        alpha=0.3,
-    )
-
-    axis.bar_label(
-        fifo_bars,
-        fmt="%.1f",
-        padding=3,
-    )
-
-    axis.bar_label(
-        deferred_bars,
-        fmt="%.1f",
-        padding=3,
-    )
-
-    save_figure(
-        figure,
-        folder_path,
-        "task_waiting_time.png",
-    )
-
-
-# =========================================================
-# 6. COMPLETION TIME BY TASK
-# =========================================================
 
 def create_completion_time_graph(
     fifo_result,
     deferred_result,
     folder_path,
+    selected_task_ids=None,
+    difference_overview=False,
+    view_label=None,
 ):
-    fifo_tasks = sorted(
-        fifo_result["tasks"],
-        key=lambda task: task.task_id,
+    _create_task_comparison_graph(
+        fifo_result=fifo_result,
+        deferred_result=deferred_result,
+        folder_path=folder_path,
+        value_getter=(
+            lambda task: task.cycle_time()
+        ),
+        title_suffix="Task Completion Time",
+        y_label="Completion Time",
+        filename="task_completion_time.png",
+        selected_task_ids=selected_task_ids,
+        difference_overview=(
+            difference_overview
+        ),
+        view_label=view_label,
     )
 
-    deferred_tasks = sorted(
-        deferred_result["tasks"],
-        key=lambda task: task.task_id,
-    )
-
-    task_ids = [
-        task.task_id
-        for task in fifo_tasks
-    ]
-
-    fifo_values = [
-        task.cycle_time()
-        for task in fifo_tasks
-    ]
-
-    deferred_values = [
-        task.cycle_time()
-        for task in deferred_tasks
-    ]
-
-    x_positions = range(
-        len(task_ids)
-    )
-
-    bar_width = 0.35
-
-    figure, axis = plt.subplots(
-        figsize=(max(10, len(task_ids) * 0.8), 6)
-    )
-
-    fifo_bars = axis.bar(
-        [
-            x - bar_width / 2
-            for x in x_positions
-        ],
-        fifo_values,
-        width=bar_width,
-        label="FIFO",
-    )
-
-    deferred_bars = axis.bar(
-        [
-            x + bar_width / 2
-            for x in x_positions
-        ],
-        deferred_values,
-        width=bar_width,
-        label="Deferred Commitment",
-    )
-
-    axis.set_title(
-        f"{fifo_result['summary']['scenario_name']}: Task Completion Time"
-    )
-
-    axis.set_xlabel(
-        "Task"
-    )
-
-    axis.set_ylabel(
-        "Completion Time"
-    )
-
-    axis.set_xticks(
-        list(x_positions)
-    )
-
-    axis.set_xticklabels(
-        task_ids
-    )
-
-    axis.legend()
-
-    axis.grid(
-        axis="y",
-        alpha=0.3,
-    )
-
-    axis.bar_label(
-        fifo_bars,
-        fmt="%.1f",
-        padding=3,
-    )
-
-    axis.bar_label(
-        deferred_bars,
-        fmt="%.1f",
-        padding=3,
-    )
-
-    save_figure(
-        figure,
-        folder_path,
-        "task_completion_time.png",
-    )
-
-
-# =========================================================
-# 7. TRAVEL DISTANCE BY TASK
-# =========================================================
 
 def create_travel_distance_graph(
     fifo_result,
     deferred_result,
     folder_path,
+    selected_task_ids=None,
+    difference_overview=False,
+    view_label=None,
 ):
-    fifo_tasks = sorted(
-        fifo_result["tasks"],
-        key=lambda task: task.task_id,
-    )
-
-    deferred_tasks = sorted(
-        deferred_result["tasks"],
-        key=lambda task: task.task_id,
-    )
-
-    task_ids = [
-        task.task_id
-        for task in fifo_tasks
-    ]
-
-    fifo_values = [
-        task.travel_distance
-        for task in fifo_tasks
-    ]
-
-    deferred_values = [
-        task.travel_distance
-        for task in deferred_tasks
-    ]
-
-    x_positions = range(
-        len(task_ids)
-    )
-
-    bar_width = 0.35
-
-    figure, axis = plt.subplots(
-        figsize=(max(10, len(task_ids) * 0.8), 6)
-    )
-
-    fifo_bars = axis.bar(
-        [
-            x - bar_width / 2
-            for x in x_positions
-        ],
-        fifo_values,
-        width=bar_width,
-        label="FIFO",
-    )
-
-    deferred_bars = axis.bar(
-        [
-            x + bar_width / 2
-            for x in x_positions
-        ],
-        deferred_values,
-        width=bar_width,
-        label="Deferred Commitment",
-    )
-
-    axis.set_title(
-        f"{fifo_result['summary']['scenario_name']}: Task Travel Distance"
-    )
-
-    axis.set_xlabel(
-        "Task"
-    )
-
-    axis.set_ylabel(
-        "Travel Distance"
-    )
-
-    axis.set_xticks(
-        list(x_positions)
-    )
-
-    axis.set_xticklabels(
-        task_ids
-    )
-
-    axis.legend()
-
-    axis.grid(
-        axis="y",
-        alpha=0.3,
-    )
-
-    axis.bar_label(
-        fifo_bars,
-        fmt="%.1f",
-        padding=3,
-    )
-
-    axis.bar_label(
-        deferred_bars,
-        fmt="%.1f",
-        padding=3,
-    )
-
-    save_figure(
-        figure,
-        folder_path,
-        "task_travel_distance.png",
+    _create_task_comparison_graph(
+        fifo_result=fifo_result,
+        deferred_result=deferred_result,
+        folder_path=folder_path,
+        value_getter=(
+            lambda task: task.travel_distance
+        ),
+        title_suffix="Task Travel Distance",
+        y_label="Travel Distance",
+        filename="task_travel_distance.png",
+        selected_task_ids=selected_task_ids,
+        difference_overview=(
+            difference_overview
+        ),
+        view_label=view_label,
     )
 
 
@@ -544,7 +712,7 @@ def create_queue_length_graph(
     ]
 
     figure, axis = plt.subplots(
-        figsize=(11, 6)
+        figsize=(10, 5.5)
     )
 
     axis.step(
@@ -863,7 +1031,7 @@ def create_total_performance_graph(
     bar_width = 0.35
 
     figure, axis = plt.subplots(
-        figsize=(8, 6)
+        figsize=(8, 5.5)
     )
 
     fifo_bars = axis.bar(
@@ -985,7 +1153,7 @@ def create_scenario_summary_graph(all_results):
 
     # Makespan comparison
     figure, axis = plt.subplots(
-        figsize=(11, 6)
+        figsize=(10, 5.5)
     )
 
     fifo_bars = axis.bar(
@@ -1057,7 +1225,7 @@ def create_scenario_summary_graph(all_results):
 
     # Total distance comparison
     figure, axis = plt.subplots(
-        figsize=(11, 6)
+        figsize=(10, 5.5)
     )
 
     fifo_bars = axis.bar(

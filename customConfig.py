@@ -1,59 +1,200 @@
 from __future__ import annotations
 
 import json
-import hashlib #unique identifier for custom scenarios
+import hashlib  # unique identifier for custom scenarios
 from typing import Callable
 
-import pandas as pd #convert tasks to csv for hashing
 import streamlit as st
 
 from dashboard_common import ARRIVAL_INTERVALS
+
+
+# ---------------------------------------------------------------------------
+# Custom-configuration scope limits
+# ---------------------------------------------------------------------------
+# These are modelling limits for this 2D AS/RS simulator. They are chosen to
+# keep layouts meaningful, simulation runs manageable, and animations readable.
+MIN_WAREHOUSE_ROWS = 7
+MAX_WAREHOUSE_ROWS = 15
+MIN_WAREHOUSE_COLUMNS = 9
+MAX_WAREHOUSE_COLUMNS = 15
+
+MIN_RACK_ROWS = 2
+MAX_RACK_ROWS = 6
+MIN_RACK_COLUMNS = 2
+MAX_RACK_COLUMNS = 6
+MIN_RACK_SPACING = 2.0
+
+MIN_ROBOTS = 2
+MAX_ROBOTS = 8
+MIN_ROBOT_START_SPACING = 1.5
+
+MIN_TASKS = 10
+MAX_TASKS = 100
+
+MIN_STORAGE_RATIO = 20
+MAX_STORAGE_RATIO = 80
+STORAGE_RATIO_STEP = 10
+
+
+def max_rack_rows_for_height(
+    warehouse_rows: int,
+) -> int:
+    """Maximum rack rows while preserving about 2 grid units vertically."""
+    minimum_y = 2.0
+    maximum_y = float(warehouse_rows - 1)
+    usable_span = max(0.0, maximum_y - minimum_y)
+
+    spacing_limited = int(
+        usable_span // MIN_RACK_SPACING
+    ) + 1
+
+    return max(
+        MIN_RACK_ROWS,
+        min(MAX_RACK_ROWS, spacing_limited),
+    )
+
+
+def max_rack_columns_for_width(
+    warehouse_columns: int,
+) -> int:
+    """Maximum rack columns while preserving about 2 grid units horizontally."""
+    minimum_x = 1.0
+    maximum_x = float(warehouse_columns - 2)
+    usable_span = max(0.0, maximum_x - minimum_x)
+
+    spacing_limited = int(
+        usable_span // MIN_RACK_SPACING
+    ) + 1
+
+    return max(
+        MIN_RACK_COLUMNS,
+        min(MAX_RACK_COLUMNS, spacing_limited),
+    )
+
+
+def max_robots_for_width(
+    warehouse_columns: int,
+) -> int:
+    """Maximum robots that keep the bottom staging corridor readable."""
+    corridor_length = float(warehouse_columns - 1)
+
+    spacing_limited = int(
+        corridor_length / MIN_ROBOT_START_SPACING
+        - 1
+    )
+
+    return max(
+        MIN_ROBOTS,
+        min(MAX_ROBOTS, spacing_limited),
+    )
 
 def generate_rack_locations(
     warehouse_rows: int,
     warehouse_columns: int,
     rack_rows: int,
     rack_columns: int,
-) -> dict[str, tuple[int, int]]:
-    if rack_rows > warehouse_rows - 2:
+) -> dict[str, tuple[float, float]]:
+    max_rack_rows = max_rack_rows_for_height(
+        warehouse_rows
+    )
+    max_rack_columns = max_rack_columns_for_width(
+        warehouse_columns
+    )
+
+    if not MIN_RACK_ROWS <= rack_rows <= max_rack_rows:
         raise ValueError(
-            "The requested rack rows do not fit inside the warehouse."
+            f"Rack rows must be between {MIN_RACK_ROWS} "
+            f"and {max_rack_rows} for a warehouse "
+            f"height of {warehouse_rows}."
         )
 
-    if rack_columns > warehouse_columns - 2:
+    if not MIN_RACK_COLUMNS <= rack_columns <= max_rack_columns:
         raise ValueError(
-            "The requested rack columns do not fit inside the warehouse."
+            f"Rack columns must be between {MIN_RACK_COLUMNS} "
+            f"and {max_rack_columns} for a warehouse "
+            f"width of {warehouse_columns}."
         )
 
-    row_positions = [
-        round(
-            1 + index * (warehouse_rows - 3) /
-            max(rack_rows - 1, 1)
+    # Keep the bottom y=0 line as the robot corridor and leave an additional
+    # grid unit of separation before the first rack row.
+    minimum_x = 1.0
+    maximum_x = float(
+        warehouse_columns - 2
+    )
+
+    minimum_y = 2.0
+    maximum_y = float(
+        warehouse_rows - 1
+    )
+
+    if rack_columns == 1:
+        column_positions = [
+            (minimum_x + maximum_x) / 2
+        ]
+    else:
+        column_spacing = (
+            maximum_x - minimum_x
+        ) / (
+            rack_columns - 1
         )
-        for index in range(rack_rows)
-    ]
 
-    column_positions = [
-        round(
-            1 + index * (warehouse_columns - 3) /
-            max(rack_columns - 1, 1)
-        )
-        for index in range(rack_columns)
-    ]
-
-    rack_positions: dict[str, tuple[int, int]] = {}
-
-    rack_number = 1
-
-    for row in row_positions:
-        for column in column_positions:
-            rack_positions[f"R{rack_number:02d}"] = (
-                column,
-                row,
+        column_positions = [
+            minimum_x
+            + column_index * column_spacing
+            for column_index in range(
+                rack_columns
             )
-            rack_number += 1
+        ]
+
+    if rack_rows == 1:
+        row_positions = [
+            (minimum_y + maximum_y) / 2
+        ]
+    else:
+        row_spacing = (
+            maximum_y - minimum_y
+        ) / (
+            rack_rows - 1
+        )
+
+        # Number racks from top to bottom so A1/B1/... are always the top row,
+        # matching the predefined warehouse convention.
+        row_positions = [
+            maximum_y
+            - row_index * row_spacing
+            for row_index in range(
+                rack_rows
+            )
+        ]
+
+    rack_positions: dict[
+        str,
+        tuple[float, float],
+    ] = {}
+
+    for row_index, row in enumerate(
+        row_positions
+    ):
+        for column_index, column in enumerate(
+            column_positions
+        ):
+            rack_letter = chr(
+                65 + column_index
+            )
+
+            rack_name = (
+                f"{rack_letter}"
+                f"{row_index + 1}"
+            )
+
+            rack_positions[rack_name] = (
+                float(column),
+                float(row),
+            )
 
     return rack_positions
+
 
 def generate_warehouse_grid(
     rows: int,
@@ -105,7 +246,7 @@ def generate_custom_tasks(
     number_of_tasks: int,
     storage_ratio: int,
     arrival_pattern: str,
-    rack_positions: dict[str, tuple[int, int]],
+    rack_positions: dict[str, tuple[float, float]],
 ) -> list[dict]:
     interval = ARRIVAL_INTERVALS[arrival_pattern]
     storage_target = storage_ratio / 100.0
@@ -154,55 +295,45 @@ def generate_custom_tasks(
 
 def generate_robot_start_positions(
     number_of_robots: int,
-    warehouse_columns: int,
-) -> dict[int, tuple[int, int]]:
-    available_positions = [
-        (column, 0)
-        for column in range(
-            1,
-            warehouse_columns - 1,
-        )
-    ]
+    entry_point: tuple[float, float],
+    exit_point: tuple[float, float],
+) -> dict[int, tuple[float, float]]:
+    entry_x, entry_y = entry_point
+    exit_x, exit_y = exit_point
 
-    if number_of_robots > len(
-        available_positions
-    ):
+    if number_of_robots < 1:
         raise ValueError(
-            "There are too many robots for "
-            "the selected warehouse width."
+            "The warehouse must contain at least "
+            "one robot."
         )
 
-    if number_of_robots == 1:
-        selected_positions = [
-            available_positions[
-                len(available_positions) // 2
-            ]
-        ]
-    else:
-        last_index = len(
-            available_positions
-        ) - 1
+    # Divide the full distance into equal gaps:
+    #
+    # Input -> R1 -> R2 -> ... -> Output
+    #
+    # Number of gaps = number of robots + 1
+    spacing_x = (
+        exit_x - entry_x
+    ) / (
+        number_of_robots + 1
+    )
 
-        selected_positions = [
-            available_positions[
-                round(
-                    index
-                    * last_index
-                    / (number_of_robots - 1)
-                )
-            ]
-            for index in range(
-                number_of_robots
-            )
-        ]
+    spacing_y = (
+        exit_y - entry_y
+    ) / (
+        number_of_robots + 1
+    )
 
     return {
-        robot_id: selected_positions[
-            robot_id - 1
-        ]
+        robot_id: (
+            entry_x
+            + robot_id * spacing_x,
+            entry_y
+            + robot_id * spacing_y,
+        )
         for robot_id in range(
             1,
-            number_of_robots + 1,
+            number_of_robots + 1
         )
     }
 
@@ -213,10 +344,14 @@ def build_custom_scenario(
     rack_rows: int,
     rack_columns: int,
     number_of_robots: int,
-    robot_speed: float,
     number_of_tasks: int,
     storage_ratio: int,
     arrival_pattern: str,
+    enable_robot_failure: bool,
+    failed_robot_id: int | None,
+    failure_time: float | None,
+    enable_standby_robot: bool,
+    standby_activation_delay: float | None,
 ) -> tuple[str, dict]:
     rack_positions = generate_rack_locations(
         warehouse_rows=warehouse_rows,
@@ -239,11 +374,25 @@ def build_custom_scenario(
         0,
     )
 
+    # A standby robot is a separate physical unit, not one of the
+    # normal active robots. Reserve a distinct staging position for it.
+    total_physical_robots = (
+        number_of_robots
+        + (1 if enable_standby_robot else 0)
+    )
+
     robot_start_positions = (
         generate_robot_start_positions(
-            number_of_robots=number_of_robots,
-            warehouse_columns=warehouse_columns,
+            number_of_robots=total_physical_robots,
+            entry_point=entry_point,
+            exit_point=exit_point,
         )
+    )
+
+    standby_robot_id = (
+        number_of_robots + 1
+        if enable_standby_robot
+        else None
     )
 
     scenario = {
@@ -253,7 +402,28 @@ def build_custom_scenario(
             "automatically from the selected parameters."
         ),
         "number_of_robots": number_of_robots,
-        "robot_speed": robot_speed,
+        "robot_failure": {
+            "enabled": enable_robot_failure,
+            "robot_id": (
+                int(failed_robot_id)
+                if failed_robot_id is not None
+                else None
+            ),
+            "failure_time": (
+                float(failure_time)
+                if failure_time is not None
+                else None
+            ),
+        },
+        "standby_robot": {
+            "enabled": bool(enable_standby_robot),
+            "robot_id": standby_robot_id,
+            "activation_delay": (
+                float(standby_activation_delay)
+                if standby_activation_delay is not None
+                else None
+            ),
+        },
         "warehouse": {
             "rows": warehouse_rows,
             "columns": warehouse_columns,
@@ -267,9 +437,8 @@ def build_custom_scenario(
         "tasks": tasks,
     }
 
-    # ????? 
-    # this is to generate a unique identifier for the custom scenario based on its configuration. 
-    # It creates a JSON string representation of the scenario, sorts the keys for consistency, and then computes a SHA-256 hash of this string combined with the number of robots and the arrival pattern. The first 12 characters of the hash are used as a unique digest to identify the custom scenario. This ensures that even if two scenarios have similar configurations, they will have different identifiers if any parameter differs.
+    # Generate a stable identifier from the complete custom scenario.
+    # Any meaningful configuration change produces a different cache key.
     signature = json.dumps(
         scenario,
         sort_keys=True,
@@ -296,10 +465,34 @@ def _summary_table(
     arrival_pattern: str,
     storage_ratio: int,
     retrieval_ratio: int,
+    enable_robot_failure: bool,
+    failed_robot_id: int | None,
+    failure_time: float | None,
+    enable_standby_robot: bool,
+    standby_activation_delay: float | None,
 ) -> None:
-    st.success("NEW CUSTOM SUMMARY FILE IS LOADED")
+    failure_text = "Disabled"
+
+    standby_text = "Disabled"
+
+    if enable_robot_failure:
+        failure_text = (
+            f"Robot {failed_robot_id} becomes unavailable "
+            f"at time {failure_time}; remaining robots "
+            "continue processing pending tasks"
+        )
+
+        if enable_standby_robot:
+            standby_id = number_of_robots + 1
+            standby_text = (
+                f"Robot {standby_id} activates "
+                f"{standby_activation_delay} time units "
+                "after the failure"
+            )
+
     summary_html = (
         '<div class="custom-summary-card">'
+
         '<div class="custom-summary-title">'
         'Custom Configuration'
         '</div>'
@@ -312,13 +505,13 @@ def _summary_table(
 
         '<div class="summary-row">'
         '<span>Rack Positions</span>'
-        f'<strong>{len(rack_positions)}</strong>'
+        f'<strong>{rack_count}</strong>'
         '</div>'
 
         '<div class="summary-divider"></div>'
 
         '<div class="summary-row">'
-        '<span>Robots</span>'
+        '<span>Active Robots</span>'
         f'<strong>{number_of_robots}</strong>'
         '</div>'
 
@@ -334,14 +527,24 @@ def _summary_table(
 
         '<div class="summary-row">'
         '<span>Storage / Retrieval</span>'
-        f'<strong>{storage_ratio}% / {retrieval_ratio}%</strong>'
+        f'<strong>{storage_ratio}% / '
+        f'{retrieval_ratio}%</strong>'
+        '</div>'
+
+        '<div class="summary-row">'
+        '<span>Robot Failure</span>'
+        f'<strong>{failure_text}</strong>'
+        '</div>'
+
+        '<div class="summary-row">'
+        '<span>Standby Robot</span>'
+        f'<strong>{standby_text}</strong>'
         '</div>'
 
         '</div>'
     )
 
     st.html(summary_html)
-
 
 def render_custom_sidebar(
     clear_callback: Callable[[], None],
@@ -354,85 +557,205 @@ def render_custom_sidebar(
         with left:
             warehouse_rows = st.number_input(
                 "Rows (Y)",
-                min_value=4,
-                max_value=20,
+                min_value=MIN_WAREHOUSE_ROWS,
+                max_value=MAX_WAREHOUSE_ROWS,
                 value=7,
                 step=1,
+                help=(
+                    "Custom simulation scope: "
+                    f"{MIN_WAREHOUSE_ROWS}–{MAX_WAREHOUSE_ROWS} rows."
+                ),
             )
-
-            
 
         with right:
             warehouse_columns = st.number_input(
                 "Columns (X)",
-                min_value=4,
-                max_value=20,
+                min_value=MIN_WAREHOUSE_COLUMNS,
+                max_value=MAX_WAREHOUSE_COLUMNS,
                 value=9,
                 step=1,
+                help=(
+                    "Custom simulation scope: "
+                    f"{MIN_WAREHOUSE_COLUMNS}–"
+                    f"{MAX_WAREHOUSE_COLUMNS} columns."
+                ),
             )
-            
+
+        max_rack_rows = max_rack_rows_for_height(
+            int(warehouse_rows)
+        )
+        max_rack_columns = max_rack_columns_for_width(
+            int(warehouse_columns)
+        )
+
         rack_left, rack_right = st.columns(2)
 
         with rack_left:
             rack_rows = st.number_input(
                 "Rack rows",
-                min_value=1,
-                max_value=max(
-                    1,
-                    int(warehouse_rows) - 2,
-                ),
-                value=min(
-                    3,
-                    int(warehouse_rows) - 2,
-                ),
+                min_value=MIN_RACK_ROWS,
+                max_value=max_rack_rows,
+                value=min(3, max_rack_rows),
                 step=1,
+                help=(
+                    "The maximum changes with warehouse "
+                    "height to preserve rack spacing."
+                ),
             )
 
         with rack_right:
             rack_columns = st.number_input(
                 "Rack columns",
-                min_value=1,
-                max_value=max(
-                    1,
-                    int(warehouse_columns) - 2,
-                ),
-                value=min(
-                    4,
-                    int(warehouse_columns) - 2,
-                ),
+                min_value=MIN_RACK_COLUMNS,
+                max_value=max_rack_columns,
+                value=min(4, max_rack_columns),
                 step=1,
+                help=(
+                    "The maximum changes with warehouse "
+                    "width to preserve rack spacing."
+                ),
             )
+
+        st.caption(
+            f"For a {int(warehouse_rows)} × "
+            f"{int(warehouse_columns)} warehouse, "
+            f"the supported rack layout is up to "
+            f"{max_rack_rows} rows × "
+            f"{max_rack_columns} columns."
+        )
 
         st.markdown("### 2. Robot configuration")
 
-        number_of_robots = st.number_input(
-            "Number of robots",
-            min_value=1,
-            max_value=10,
-            value=3,
-            step=1,
+        max_robots = max_robots_for_width(
+            int(warehouse_columns)
         )
 
-        robot_speed = st.number_input(
-            "Robot speed (cell/sec)",
-            min_value=0.1,
-            max_value=5.0,
-            value=1.0,
-            step=0.1,
+        number_of_robots = st.number_input(
+            "Number of robots",
+            min_value=MIN_ROBOTS,
+            max_value=max_robots,
+            value=min(3, max_robots),
+            step=1,
             help=(
-                "Robot speed is currently fixed "
-                "inside simulation.py."
+                "The maximum changes with warehouse width "
+                "so robot starting positions remain separated "
+                "along the bottom corridor."
             ),
         )
+
+        st.caption(
+            f"This warehouse width supports up to "
+            f"{max_robots} robots in the custom model."
+        )
+
+        enable_robot_failure = st.checkbox(
+            "Enable robot failure",
+            value=False,
+            key="custom_enable_robot_failure",
+            disabled=int(number_of_robots) < 2,
+            help=(
+                "Robot failure requires at least two robots "
+                "so remaining tasks can still be completed."
+            ),
+        )
+
+        failed_robot_id = None
+        failure_time = None
+        enable_standby_robot = False
+        standby_activation_delay = None
+
+        if enable_robot_failure:
+            failed_robot_id = st.selectbox(
+                "Robot to fail",
+                options=list(
+                    range(
+                        1,
+                        int(number_of_robots) + 1,
+                    )
+                ),
+                format_func=lambda robot_id: (
+                    f"Robot {robot_id}"
+                ),
+                key="custom_failed_robot_id",
+            )
+
+            failure_time = st.number_input(
+                "Failure time",
+                min_value=0.0,
+                value=30.0,
+                step=1.0,
+                key="custom_failure_time",
+                help=(
+                    "Simulation time when the selected robot "
+                    "stops receiving new tasks."
+                ),
+            )
+
+            st.caption(
+                "Failure assumption: if the robot is already "
+                "processing a task at the failure time, it "
+                "finishes that task and then remains unavailable. "
+                "The remaining operational robots continue with "
+                "all pending tasks."
+            )
+
+            standby_slot_available = (
+                int(number_of_robots) < max_robots
+            )
+
+            enable_standby_robot = st.checkbox(
+                "Enable standby replacement robot",
+                value=False,
+                key="custom_enable_standby_robot",
+                disabled=not standby_slot_available,
+                help=(
+                    "A separate standby robot is kept inactive until "
+                    "a configured delay after the failure. It then joins "
+                    "the available robot pool as replacement capacity."
+                ),
+            )
+
+            if not standby_slot_available:
+                enable_standby_robot = False
+                st.caption(
+                    "A standby robot requires one additional staging "
+                    "position. Reduce the number of active robots to "
+                    f"{max_robots - 1} or fewer to enable it."
+                )
+
+            if enable_standby_robot:
+                standby_activation_delay = st.number_input(
+                    "Standby activation delay",
+                    min_value=0.0,
+                    value=20.0,
+                    step=1.0,
+                    key="custom_standby_activation_delay",
+                    help=(
+                        "Delay after the failure before the standby "
+                        "robot becomes operational."
+                    ),
+                )
+
+                st.caption(
+                    f"Standby Robot {int(number_of_robots) + 1} will "
+                    "remain inactive at its staging position and enter "
+                    "service after the selected delay."
+                )
 
         st.markdown("### 3. Task configuration")
 
         number_of_tasks = st.number_input(
             "Total number of tasks",
-            min_value=1,
-            max_value=200,
+            min_value=MIN_TASKS,
+            max_value=MAX_TASKS,
             value=50,
             step=1,
+            help=(
+                "The custom configuration supports "
+                f"{MIN_TASKS}–{MAX_TASKS} tasks. "
+                "Higher-load edge cases can be represented "
+                "through the predefined stress scenarios."
+            ),
         )
 
         arrival_pattern = st.selectbox(
@@ -443,32 +766,61 @@ def render_custom_sidebar(
 
         storage_ratio = st.slider(
             "Storage ratio (%)",
-            min_value=0,
-            max_value=100,
+            min_value=MIN_STORAGE_RATIO,
+            max_value=MAX_STORAGE_RATIO,
             value=50,
-            step=5,
+            step=STORAGE_RATIO_STEP,
+            help=(
+                "The custom mode keeps both storage and "
+                "retrieval tasks represented. Extreme "
+                "single-type workloads are better handled "
+                "as dedicated predefined scenarios."
+            ),
         )
 
         retrieval_ratio = 100 - storage_ratio
 
         scenario_key, selected_scenario = (
             build_custom_scenario(
-                warehouse_rows=int(warehouse_rows),
-                warehouse_columns=int(warehouse_columns),
+                warehouse_rows=int(
+                    warehouse_rows
+                ),
+                warehouse_columns=int(
+                    warehouse_columns
+                ),
                 rack_rows=int(rack_rows),
                 rack_columns=int(rack_columns),
-                number_of_robots=int(number_of_robots),
-                robot_speed=float(robot_speed),
-                number_of_tasks=int(number_of_tasks),
-                storage_ratio=int(storage_ratio),
+                number_of_robots=int(
+                    number_of_robots
+                ),
+                number_of_tasks=int(
+                    number_of_tasks
+                ),
+                storage_ratio=int(
+                    storage_ratio
+                ),
                 arrival_pattern=arrival_pattern,
+                enable_robot_failure=(
+                    enable_robot_failure
+                ),
+                failed_robot_id=failed_robot_id,
+                failure_time=failure_time,
+                enable_standby_robot=(
+                    enable_standby_robot
+                ),
+                standby_activation_delay=(
+                    standby_activation_delay
+                ),
             )
         )
+
         rack_positions = selected_scenario[
             "warehouse"
         ]["rack_positions"]
 
-        st.markdown("### Configuration summary")
+        st.markdown(
+            "### Configuration summary"
+        )
 
         _summary_table(
             warehouse_rows=int(
@@ -478,17 +830,9 @@ def render_custom_sidebar(
                 warehouse_columns
             ),
             rack_count=len(
-                selected_scenario[
-                    "warehouse"
-                ][
-                    "rack_positions"
-                ]
+                rack_positions
             ),
-            rack_positions=selected_scenario[
-                "warehouse"
-            ][
-                "rack_positions"
-            ],
+            rack_positions=rack_positions,
             number_of_robots=int(
                 number_of_robots
             ),
@@ -502,6 +846,13 @@ def render_custom_sidebar(
             retrieval_ratio=int(
                 retrieval_ratio
             ),
+            enable_robot_failure=enable_robot_failure,
+            failed_robot_id=failed_robot_id,
+            failure_time=failure_time,
+            enable_standby_robot=enable_standby_robot,
+            standby_activation_delay=(
+                standby_activation_delay
+            ),
         )
 
         st.button(
@@ -510,18 +861,53 @@ def render_custom_sidebar(
             on_click=clear_callback,
         )
 
-        # Validate configuration and display errors if any
         errors = validate_configuration(
-            warehouse_rows=int(warehouse_rows),
-            warehouse_columns=int(warehouse_columns),
+            warehouse_rows=int(
+                warehouse_rows
+            ),
+            warehouse_columns=int(
+                warehouse_columns
+            ),
             rack_rows=int(rack_rows),
             rack_columns=int(rack_columns),
-            number_of_robots=int(number_of_robots),
+            number_of_robots=int(
+                number_of_robots
+            ),
+            number_of_tasks=int(
+                number_of_tasks
+            ),
+            storage_ratio=int(
+                storage_ratio
+            ),
+            enable_standby_robot=(
+                enable_standby_robot
+            ),
         )
+
+        if enable_robot_failure:
+            if failed_robot_id is None:
+                errors.append(
+                    "Please select a robot to fail."
+                )
+
+            if failure_time is None:
+                errors.append(
+                    "Please enter the failure time."
+                )
+
+            if enable_standby_robot:
+                if standby_activation_delay is None:
+                    errors.append(
+                        "Please enter the standby activation delay."
+                    )
+                elif standby_activation_delay < 0:
+                    errors.append(
+                        "Standby activation delay cannot be negative."
+                    )
+
 
         for error in errors:
             st.error(error)
-
 
         run_clicked = st.button(
             "▶ Run strategy comparison",
@@ -531,8 +917,8 @@ def render_custom_sidebar(
         )
 
         st.caption(
-            "Both FIFO and Deferred Commitment are run "
-            "using the custom configuration."
+            "Both FIFO and Deferred Commitment "
+            "are run using the custom configuration."
         )
 
     return {
@@ -548,52 +934,118 @@ def validate_configuration(
     rack_rows: int,
     rack_columns: int,
     number_of_robots: int,
+    number_of_tasks: int,
+    storage_ratio: int,
+    enable_standby_robot: bool = False,
 ) -> list[str]:
     errors: list[str] = []
 
-    if warehouse_rows < 1:
+    if not (
+        MIN_WAREHOUSE_ROWS
+        <= warehouse_rows
+        <= MAX_WAREHOUSE_ROWS
+    ):
         errors.append(
-            "Warehouse height must be at least 1 row."
+            "Warehouse rows must be between "
+            f"{MIN_WAREHOUSE_ROWS} and "
+            f"{MAX_WAREHOUSE_ROWS}."
         )
 
-    if warehouse_columns < 1:
+    if not (
+        MIN_WAREHOUSE_COLUMNS
+        <= warehouse_columns
+        <= MAX_WAREHOUSE_COLUMNS
+    ):
         errors.append(
-            "Warehouse width must be at least 1 column."
+            "Warehouse columns must be between "
+            f"{MIN_WAREHOUSE_COLUMNS} and "
+            f"{MAX_WAREHOUSE_COLUMNS}."
         )
 
-    if rack_rows > warehouse_rows - 2:
-        errors.append(
-            "There are too many rack rows for the "
-            "selected warehouse height."
-        )
-
-    if rack_columns > warehouse_columns - 2:
-        errors.append(
-            "There are too many rack columns for the "
-            "selected warehouse width."
-        )
-
-    available_boundary_cells = (
-        warehouse_rows * 2
-        + warehouse_columns * 2
-        - 4
+    max_rack_rows = max_rack_rows_for_height(
+        warehouse_rows
+    )
+    max_rack_columns = max_rack_columns_for_width(
+        warehouse_columns
     )
 
-    if number_of_robots > available_boundary_cells:
+    if not (
+        MIN_RACK_ROWS
+        <= rack_rows
+        <= max_rack_rows
+    ):
         errors.append(
-            "There are not enough starting cells "
-            "for the selected number of robots."
+            f"For a warehouse height of {warehouse_rows}, "
+            f"rack rows must be between {MIN_RACK_ROWS} "
+            f"and {max_rack_rows}."
         )
 
-    available_starting_cells = (
-        warehouse_columns - 2
+    if not (
+        MIN_RACK_COLUMNS
+        <= rack_columns
+        <= max_rack_columns
+    ):
+        errors.append(
+            f"For a warehouse width of {warehouse_columns}, "
+            f"rack columns must be between "
+            f"{MIN_RACK_COLUMNS} and "
+            f"{max_rack_columns}."
+        )
+
+    max_robots = max_robots_for_width(
+        warehouse_columns
     )
 
-    if number_of_robots > available_starting_cells:
+    if not (
+        MIN_ROBOTS
+        <= number_of_robots
+        <= max_robots
+    ):
         errors.append(
-            "There are too many robots for the "
-            "available starting positions along "
-            "the bottom corridor."
+            f"For a warehouse width of {warehouse_columns}, "
+            f"the number of robots must be between "
+            f"{MIN_ROBOTS} and {max_robots}."
+        )
+
+    total_physical_robots = (
+        number_of_robots
+        + (1 if enable_standby_robot else 0)
+    )
+
+    if total_physical_robots > max_robots:
+        errors.append(
+            "The selected standby robot requires one additional "
+            "staging position. Reduce the number of active robots "
+            f"to {max_robots - 1} or fewer for this warehouse width."
+        )
+
+    if not (
+        MIN_TASKS
+        <= number_of_tasks
+        <= MAX_TASKS
+    ):
+        errors.append(
+            "Total tasks must be between "
+            f"{MIN_TASKS} and {MAX_TASKS}."
+        )
+
+    if not (
+        MIN_STORAGE_RATIO
+        <= storage_ratio
+        <= MAX_STORAGE_RATIO
+    ):
+        errors.append(
+            "Storage ratio must be between "
+            f"{MIN_STORAGE_RATIO}% and "
+            f"{MAX_STORAGE_RATIO}%."
+        )
+
+    if (
+        storage_ratio - MIN_STORAGE_RATIO
+    ) % STORAGE_RATIO_STEP != 0:
+        errors.append(
+            "Storage ratio must use "
+            f"{STORAGE_RATIO_STEP}% increments."
         )
 
     return errors
