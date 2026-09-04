@@ -1,0 +1,41 @@
+.custom-summary-card {
+    background: #FFFFFF;
+    border: 1px solid #D7E1EB;
+    border-left: 6px solid #2F78A5;
+    border-radius: 14px;
+    padding: 1rem;
+    box-shadow:
+        0 4px 12px
+        rgba(17, 45, 72, 0.08);
+    margin-bottom: 0.8rem;
+}
+
+.custom-summary-title {
+    color: #0B2748 !important;
+    font-size: 1rem;
+    font-weight: 850;
+    margin-bottom: 0.75rem;
+}
+
+.summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.22rem 0;
+}
+
+.summary-row span {
+    color: #4D5B70 !important;
+}
+
+.summary-row strong {
+    color: #0B4F78 !important;
+    text-align: right;
+}
+
+.summary-divider {
+    height: 1px;
+    background: #D7E1EB;
+    margin: 0.65rem 0;
+}
