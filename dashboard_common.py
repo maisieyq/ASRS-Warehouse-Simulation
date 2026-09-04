@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import matplotlib
@@ -93,6 +94,62 @@ ARRIVAL_INTERVALS = {
     "Normal demand": 2.0,
     "High demand": 1.0,
 }
+
+
+
+"""
+Create a readable filename for downloaded CSV files.
+
+Format: 
+ScenarioName_NumRobotsNumTasks_Task_Details_DateTime.csv
+"""
+def build_export_filename(
+    scenario: dict,
+    content_type: str,
+) -> str:
+
+    scenario_name = str(
+        scenario.get(
+            "name",
+            "Scenario",
+        )
+    )
+
+    # Make the scenario name filename-friendly.
+    scenario_name = (
+        scenario_name
+        .strip()
+        .replace(" ", "_")
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace(":", "")
+    )
+
+    number_of_robots = int(
+        scenario.get(
+            "number_of_robots",
+            0,
+        )
+    )
+
+    number_of_tasks = len(
+        scenario.get(
+            "tasks",
+            [],
+        )
+    )
+
+    timestamp = datetime.now().strftime(
+        "%Y%m%d%H%M"
+    )
+
+    return (
+        f"{scenario_name}_"
+        f"{number_of_robots}R"
+        f"{number_of_tasks}T_"
+        f"{content_type}_"
+        f"{timestamp}.csv"
+    )
 
 
 def clear_dashboard_selection() -> None:
@@ -1306,7 +1363,7 @@ def _render_tables(
 
 
 def _render_exports(
-    scenario_key: str,
+    scenario: dict,
     comparison: pd.DataFrame,
     all_tasks: pd.DataFrame,
     all_robots: pd.DataFrame,
@@ -1326,8 +1383,9 @@ def _render_exports(
             comparison.to_csv(
                 index=False
             ).encode("utf-8"),
-            file_name=(
-                f"{scenario_key}_comparison.csv"
+            file_name=build_export_filename(
+                scenario=scenario,
+                content_type="Comparison",
             ),
             mime="text/csv",
             use_container_width=True,
@@ -1339,8 +1397,9 @@ def _render_exports(
             all_tasks.to_csv(
                 index=False
             ).encode("utf-8"),
-            file_name=(
-                f"{scenario_key}_tasks.csv"
+            file_name=build_export_filename(
+                scenario=scenario,
+                content_type="Task_Details",
             ),
             mime="text/csv",
             use_container_width=True,
@@ -1352,8 +1411,9 @@ def _render_exports(
             all_robots.to_csv(
                 index=False
             ).encode("utf-8"),
-            file_name=(
-                f"{scenario_key}_robots.csv"
+            file_name=build_export_filename(
+                scenario=scenario,
+                content_type="Robot_Details",
             ),
             mime="text/csv",
             use_container_width=True,
@@ -1521,7 +1581,7 @@ def run_and_render_dashboard(
         )
 
         _render_exports(
-            scenario_key,
+            scenario,
             comparison,
             all_tasks,
             all_robots,
