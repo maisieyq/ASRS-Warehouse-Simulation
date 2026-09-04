@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -26,12 +27,61 @@ from ScenarioBasicConfig import animation as animation_engine
 from ScenarioBasicConfig import graph as graph_engine
 
 
-OUTPUTS_FOLDER = SCENARIO_FOLDER / "outputs"
-ANIMATION_CACHE_FOLDER = (
-    PROJECT_FOLDER
-    / ".dashboard_animation_cache"
+IS_PACKAGED = getattr(sys, "frozen", False)
+if IS_PACKAGED:
+    # ==========================================
+    # Packaged EXE version
+    # ==========================================
+
+    LOCAL_APP_DATA = Path(
+        os.getenv(
+            "LOCALAPPDATA",
+            str(Path.home()),
+        )
+    )
+
+    USER_DATA_FOLDER = (
+        LOCAL_APP_DATA
+        / "ASRS_Warehouse_Simulation"
+    )
+
+    OUTPUTS_FOLDER = (
+        USER_DATA_FOLDER
+        / "outputs"
+    )
+
+    ANIMATION_CACHE_FOLDER = (
+        USER_DATA_FOLDER
+        / "animation_cache"
+    )
+
+else:
+    # ==========================================
+    # Development version
+    # streamlit run app.py
+    # ==========================================
+
+    OUTPUTS_FOLDER = (
+        SCENARIO_FOLDER
+        / "outputs"
+    )
+
+    ANIMATION_CACHE_FOLDER = (
+        PROJECT_FOLDER
+        / ".dashboard_animation_cache"
+    )
+
+
+# Make sure folders exist
+OUTPUTS_FOLDER.mkdir(
+    parents=True,
+    exist_ok=True,
 )
 
+ANIMATION_CACHE_FOLDER.mkdir(
+    parents=True,
+    exist_ok=True,
+)
 PREDEFINED_VALID_RACKS = {
     f"{letter}{number}"
     for letter in "ABCD"
