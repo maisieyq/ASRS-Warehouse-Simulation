@@ -1,4 +1,4 @@
-# ASRS Warehouse Simulation
+# ASRS Warehouse Simulations
 
 A discrete-event simulation of an Automated Storage and Retrieval System (ASRS) developed using Python and SimPy. This project compares the performance of **FIFO (First-In, First-Out)** and **Deferred Commitment** task dispatching strategies in a multi-robot warehouse environment.
 

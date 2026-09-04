@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -7,10 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
-
 
 PROJECT_FOLDER = Path(__file__).resolve().parent
 SCENARIO_FOLDER = PROJECT_FOLDER / "ScenarioBasicConfig"
@@ -21,9 +20,10 @@ if str(SCENARIO_FOLDER) not in sys.path:
         str(SCENARIO_FOLDER),
     )
 
-from scenarios import SCENARIOS
-from simulation import run_simulation
-import animation as animation_engine
+from ScenarioBasicConfig.scenarios import SCENARIOS
+from ScenarioBasicConfig.simulation import run_simulation
+from ScenarioBasicConfig import animation as animation_engine
+from ScenarioBasicConfig import graph as graph_engine
 
 
 OUTPUTS_FOLDER = SCENARIO_FOLDER / "outputs"
@@ -44,41 +44,6 @@ ARRIVAL_INTERVALS = {
     "High demand": 1.0,
 }
 
-PLOTLY_COLORS = [
-    "#2F78A5",
-    "#EF8F2F",
-]
-
-PLOTLY_LAYOUT = {
-    "template": "plotly_white",
-    "font": {
-        "color": "#172033",
-        "size": 12,
-    },
-    "paper_bgcolor": "#FFFFFF",
-    "plot_bgcolor": "#FFFFFF",
-    "xaxis": {
-        "title_font": {
-            "color": "#172033",
-        },
-        "tickfont": {
-            "color": "#36445A",
-        },
-        "gridcolor": "#E7EDF4",
-        "zerolinecolor": "#D8E1EB",
-    },
-    "yaxis": {
-        "title_font": {
-            "color": "#172033",
-        },
-        "tickfont": {
-            "color": "#36445A",
-        },
-        "gridcolor": "#E7EDF4",
-        "zerolinecolor": "#D8E1EB",
-    },
-}
-
 
 def clear_dashboard_selection() -> None:
     st.session_state["scenario_source"] = None
@@ -92,6 +57,15 @@ def clear_dashboard_selection() -> None:
     ]
 
     for key in result_keys:
+        del st.session_state[key]
+
+    animation_keys = [
+        key
+        for key in list(st.session_state.keys())
+        if str(key).startswith("animation_path_")
+    ]
+
+    for key in animation_keys:
         del st.session_state[key]
 
 
@@ -132,29 +106,6 @@ def render_landing_message(
     )
 
 
-def style_figure(
-    figure: go.Figure,
-    height: int,
-) -> go.Figure:
-    figure.update_layout(
-        **PLOTLY_LAYOUT,
-        title={"text": ""},
-        height=height,
-        margin={
-            "l": 12,
-            "r": 12,
-            "t": 18,
-            "b": 12,
-        },
-        legend_title_text="",
-        hoverlabel={
-            "font_size": 13,
-        },
-    )
-
-    return figure
-
-
 def task_frame(
     result: dict,
     strategy_label: str,
@@ -172,6 +123,13 @@ def task_frame(
                 "Start Time": task.start_time,
                 "Completion Time": task.completion_time,
                 "Waiting Time": task.waiting_time(),
+                "Rack Access Wait": float(
+                    getattr(
+                        task,
+                        "rack_access_wait_time",
+                        0.0,
+                    )
+                ),
                 "Cycle Time": task.cycle_time(),
                 "Travel Distance": task.travel_distance,
                 "Robot ID": f"R{task.robot_id}",
@@ -233,6 +191,10 @@ def comparison_frame(
             "average_waiting_time",
         ),
         (
+            "Average Rack Access Waiting Time",
+            "average_rack_access_waiting_time",
+        ),
+        (
             "Average Completion Time",
             "average_completion_time",
         ),
@@ -255,6 +217,14 @@ def comparison_frame(
     records: list[dict] = []
 
     for label, key in metrics:
+        # Keep compatibility with results generated before rack-access
+        # waiting was introduced.
+        if (
+            key not in fifo_summary
+            or key not in deferred_summary
+        ):
+            continue
+
         fifo_value = float(
             fifo_summary[key]
         )
@@ -299,73 +269,51 @@ def comparison_frame(
     return pd.DataFrame(records)
 
 
-def shipped_animation_path(
-    scenario_key: str,
-    strategy: str,
-) -> Path:
-    return (
-        OUTPUTS_FOLDER
-        / scenario_key
-        / (
-            f"{strategy.lower()}"
-            "_warehouse_animation.gif"
-        )
-    )
-
-
-def cached_animation_path(
-    scenario_key: str,
-    strategy: str,
-) -> Path:
-    return (
-        ANIMATION_CACHE_FOLDER
-        / scenario_key
-        / (
-            f"{strategy.lower()}"
-            "_warehouse_animation.gif"
-        )
-    )
-
-
 def get_or_build_animation(
     scenario_key: str,
     strategy: str,
     result: dict,
+    quality: str = "standard",
 ) -> Path:
-    shipped_path = shipped_animation_path(
-        scenario_key,
-        strategy,
+    original_output_folder = (
+        animation_engine.OUTPUT_FOLDER
     )
 
-    if shipped_path.exists():
-        return shipped_path
-
-    cache_path = cached_animation_path(
-        scenario_key,
-        strategy,
+    animation_engine.OUTPUT_FOLDER = str(
+        ANIMATION_CACHE_FOLDER
     )
 
-    if not cache_path.exists():
-        original_output_folder = (
-            animation_engine.OUTPUT_FOLDER
-        )
-
-        animation_engine.OUTPUT_FOLDER = str(
-            ANIMATION_CACHE_FOLDER
-        )
-
-        try:
+    try:
+        animation_path = (
             animation_engine.create_animation(
                 strategy=strategy.upper(),
                 scenario_name=scenario_key,
                 result=result,
+                quality=quality,
             )
-        finally:
-            animation_engine.OUTPUT_FOLDER = (
-                original_output_folder
-            )
+        )
+    finally:
+        animation_engine.OUTPUT_FOLDER = (
+            original_output_folder
+        )
 
-    return cache_path
+    return Path(animation_path)
+
+
+def _display_animation(path: Path) -> None:
+    if not path.exists():
+        st.error(
+            "The animation file could not be found."
+        )
+        return
+
+    if path.suffix.lower() == ".mp4":
+        st.video(str(path))
+    else:
+        st.image(
+            str(path),
+            use_container_width=True,
+        )
 
 
 def _run_results(
@@ -417,38 +365,67 @@ def _render_metrics(
 ) -> None:
     st.markdown(
         '<div class="section-title">'
-        'Performance snapshot'
+        'Performance snapshot — Deferred Commitment vs FIFO'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    metric_columns = st.columns(6)
+    st.caption(
+        "The large value on each card is the Deferred Commitment result. "
+        "The delta is the actual percentage difference from FIFO: "
+        "a negative delta means Deferred Commitment is lower (better for "
+        "these metrics), while a positive delta means it is higher."
+    )
+
+    # Six cards in one row become unreadable whenever the configuration
+    # sidebar is open. A responsive 3 x 2 layout keeps the full values and
+    # delta text visible without asking the user to collapse the sidebar.
+    first_row = st.columns(3)
+    second_row = st.columns(3)
 
     headline_metrics = [
         (
-            "Avg waiting",
+            "Average waiting time",
             "average_waiting_time",
+            "float",
         ),
         (
-            "Avg completion",
+            "Average completion time",
             "average_completion_time",
+            "float",
         ),
         (
-            "Avg distance",
+            "Average travel distance",
             "average_travel_distance",
+            "float",
         ),
-        ("Makespan", "makespan"),
         (
-            "Avg queue",
+            "Makespan",
+            "makespan",
+            "float",
+        ),
+        (
+            "Average queue length",
             "average_queue_length",
+            "float",
         ),
         (
-            "Max queue",
+            "Maximum queue length",
             "maximum_queue_length",
+            "integer",
         ),
     ]
 
-    for column, (label, key) in zip(
+    metric_columns = (
+        first_row
+        + second_row
+    )
+
+    for column, (
+        label,
+        key,
+        value_format,
+    ) in zip(
         metric_columns,
         headline_metrics,
     ):
@@ -460,9 +437,9 @@ def _render_metrics(
             deferred_summary[key]
         )
 
-        improvement = (
+        difference_percent = (
             (
-                fifo_value - deferred_value
+                deferred_value - fifo_value
             )
             / fifo_value
             * 100
@@ -470,16 +447,43 @@ def _render_metrics(
             else 0
         )
 
+        if value_format == "integer":
+            value_text = str(
+                int(round(deferred_value))
+            )
+        else:
+            value_text = (
+                f"{deferred_value:.2f}"
+            )
+
         column.metric(
             label,
-            f"{deferred_value:.2f}",
-            f"{improvement:+.1f}% vs FIFO",
-            delta_color="normal",
+            value_text,
+            f"{difference_percent:+.1f}% vs FIFO",
+            # Lower values are better for all six headline metrics.
+            # Inverse makes a negative difference (Deferred is lower)
+            # appear as the favourable/green direction.
+            delta_color="inverse",
             help=(
-                "The main value is Deferred "
-                "Commitment. The delta compares "
-                "it with FIFO."
+                "Main value: Deferred Commitment. "
+                "Delta = (Deferred - FIFO) / FIFO × 100%. "
+                "Negative means Deferred Commitment is lower; "
+                "positive means it is higher."
             ),
+        )
+
+    # Rack-access waiting is a useful secondary diagnostic after the
+    # exclusive rack reservation rule was introduced, but keeping it
+    # outside the six headline cards avoids crowding the snapshot.
+    if (
+        "average_rack_access_waiting_time"
+        in deferred_summary
+    ):
+        st.caption(
+            "Average rack-access waiting time "
+            "(Deferred Commitment): "
+            f"{float(deferred_summary['average_rack_access_waiting_time']):.2f}. "
+            "See the comparison table for FIFO and Deferred values."
         )
 
 
@@ -495,280 +499,630 @@ def _render_animations(
         unsafe_allow_html=True,
     )
 
+    st.caption(
+        "Animations are generated only when requested. "
+        "This avoids blocking the analysis while video "
+        "files are being rendered."
+    )
+
+    quality = st.selectbox(
+        "Animation quality",
+        ["fast", "standard", "detailed"],
+        index=1,
+        key=f"animation_quality_{scenario_key}",
+    )
+
     left, right = st.columns(2)
 
-    with st.spinner(
-        "Preparing 2D animations..."
-    ):
-        fifo_path = get_or_build_animation(
-            scenario_key,
-            "FIFO",
-            fifo_result,
-        )
-
-        deferred_path = get_or_build_animation(
-            scenario_key,
+    specs = [
+        (left, "FIFO", fifo_result, "FIFO"),
+        (
+            right,
             "DEFERRED",
             deferred_result,
+            "Deferred Commitment",
+        ),
+    ]
+
+    for column, strategy, result, label in specs:
+        state_key = (
+            f"animation_path_{scenario_key}_"
+            f"{strategy.lower()}_{quality}"
         )
 
-    with left:
-        st.markdown(
-            """
-            <div class="animation-title fifo-title">
-                ● FIFO
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        with column:
+            st.markdown(f"#### {label}")
 
-        st.image(
-            str(fifo_path),
-            use_container_width=True,
-        )
+            if st.button(
+                f"Generate {label} animation",
+                key=(
+                    f"generate_{scenario_key}_"
+                    f"{strategy.lower()}_{quality}"
+                ),
+                use_container_width=True,
+            ):
+                with st.spinner(
+                    f"Generating {label} animation..."
+                ):
+                    path = get_or_build_animation(
+                        scenario_key=scenario_key,
+                        strategy=strategy,
+                        result=result,
+                        quality=quality,
+                    )
+                    st.session_state[
+                        state_key
+                    ] = str(path)
 
-    with right:
-        st.markdown(
-            """
-            <div class="
-                animation-title deferred-title
-            ">
-                ● Deferred Commitment
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            existing_path = (
+                st.session_state.get(state_key)
+            )
 
-        st.image(
-            str(deferred_path),
-            use_container_width=True,
-        )
+            if existing_path:
+                _display_animation(
+                    Path(existing_path)
+                )
+            else:
+                st.info(
+                    "Generate this animation when needed."
+                )
+
+
+def _graph_result_hash(
+    fifo_result: dict,
+    deferred_result: dict,
+) -> str:
+    """
+    Build a stable hash from the data that affects graph output.
+
+    This prevents an old PNG from being reused after simulation logic,
+    rack-access waiting, robot allocation, or graph rendering rules change.
+    """
+    def serialise_result(
+        result: dict,
+    ) -> dict:
+        summary = {
+            key: (
+                float(value)
+                if isinstance(
+                    value,
+                    (int, float),
+                )
+                else str(value)
+            )
+            for key, value
+            in result["summary"].items()
+        }
+
+        tasks = [
+            {
+                "task_id": str(task.task_id),
+                "waiting": float(
+                    task.waiting_time()
+                    or 0.0
+                ),
+                "cycle": float(
+                    task.cycle_time()
+                    or 0.0
+                ),
+                "distance": float(
+                    task.travel_distance
+                ),
+                "rack_wait": float(
+                    getattr(
+                        task,
+                        "rack_access_wait_time",
+                        0.0,
+                    )
+                ),
+            }
+            for task in sorted(
+                result["tasks"],
+                key=lambda item: item.task_id,
+            )
+        ]
+
+        robots = [
+            {
+                "robot_id": int(
+                    robot.robot_id
+                ),
+                "completed": int(
+                    robot.completed_tasks
+                ),
+                "distance": float(
+                    robot.total_distance
+                ),
+                "busy": float(
+                    robot.busy_time
+                ),
+            }
+            for robot in sorted(
+                result["robots"],
+                key=lambda item: item.robot_id,
+            )
+        ]
+
+        return {
+            "summary": summary,
+            "tasks": tasks,
+            "robots": robots,
+        }
+
+    payload = {
+        "graph_version": getattr(
+            graph_engine,
+            "GRAPH_RENDER_VERSION",
+            "v1",
+        ),
+        "fifo": serialise_result(
+            fifo_result
+        ),
+        "deferred": serialise_result(
+            deferred_result
+        ),
+    }
+
+    signature = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    return hashlib.sha256(
+        signature.encode("utf-8")
+    ).hexdigest()[:12]
+
+
+def generate_graph_files(
+    scenario_key: str,
+    fifo_result: dict,
+    deferred_result: dict,
+) -> Path:
+    """
+    Generate/cache graphs that do not depend on the task-range selector.
+    """
+    result_hash = _graph_result_hash(
+        fifo_result,
+        deferred_result,
+    )
+
+    scenario_folder = (
+        OUTPUTS_FOLDER
+        / scenario_key
+        / result_hash
+        / "base"
+    )
+
+    scenario_folder.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    expected_files = [
+        "core_metrics_comparison.png",
+        "queue_length_over_time.png",
+        "robot_total_distance.png",
+        "robot_utilization.png",
+        "overall_strategy_performance.png",
+    ]
+
+    if all(
+        (scenario_folder / filename).exists()
+        and (scenario_folder / filename).stat().st_size > 0
+        for filename in expected_files
+    ):
+        return scenario_folder
+
+    folder_path = str(
+        scenario_folder
+    )
+
+    graph_engine.create_main_metrics_graph(
+        fifo_result,
+        deferred_result,
+        folder_path,
+    )
+
+    graph_engine.create_queue_length_graph(
+        fifo_result,
+        deferred_result,
+        folder_path,
+    )
+
+    graph_engine.create_robot_distance_graph(
+        fifo_result,
+        deferred_result,
+        folder_path,
+    )
+
+    graph_engine.create_robot_utilization_graph(
+        fifo_result,
+        deferred_result,
+        folder_path,
+    )
+
+    graph_engine.create_total_performance_graph(
+        fifo_result,
+        deferred_result,
+        folder_path,
+    )
+
+    return scenario_folder
+
+
+def generate_task_graph_files(
+    scenario_key: str,
+    fifo_result: dict,
+    deferred_result: dict,
+    selected_task_ids: list[str] | None,
+    task_view_label: str,
+    difference_overview: bool,
+) -> Path:
+    """
+    Generate/cache only the three task-level graphs for the selected view.
+
+    Switching from "All tasks" to "Tasks 1-25" therefore does not
+    regenerate core metrics, queue, or robot graphs.
+    """
+    result_hash = _graph_result_hash(
+        fifo_result,
+        deferred_result,
+    )
+
+    view_payload = {
+        "graph_version": getattr(
+            graph_engine,
+            "GRAPH_RENDER_VERSION",
+            "v1",
+        ),
+        "task_view_label": task_view_label,
+        "difference_overview": (
+            difference_overview
+        ),
+        "selected_task_ids": (
+            selected_task_ids
+            if selected_task_ids is not None
+            else "ALL"
+        ),
+    }
+
+    view_signature = json.dumps(
+        view_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    view_hash = hashlib.sha256(
+        view_signature.encode("utf-8")
+    ).hexdigest()[:10]
+
+    task_folder = (
+        OUTPUTS_FOLDER
+        / scenario_key
+        / result_hash
+        / "task_views"
+        / view_hash
+    )
+
+    task_folder.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    expected_files = [
+        "task_waiting_time.png",
+        "task_completion_time.png",
+        "task_travel_distance.png",
+    ]
+
+    if all(
+        (task_folder / filename).exists()
+        and (task_folder / filename).stat().st_size > 0
+        for filename in expected_files
+    ):
+        return task_folder
+
+    folder_path = str(
+        task_folder
+    )
+
+    graph_engine.create_waiting_time_graph(
+        fifo_result,
+        deferred_result,
+        folder_path,
+        selected_task_ids=(
+            selected_task_ids
+        ),
+        difference_overview=(
+            difference_overview
+        ),
+        view_label=task_view_label,
+    )
+
+    graph_engine.create_completion_time_graph(
+        fifo_result,
+        deferred_result,
+        folder_path,
+        selected_task_ids=(
+            selected_task_ids
+        ),
+        difference_overview=(
+            difference_overview
+        ),
+        view_label=task_view_label,
+    )
+
+    graph_engine.create_travel_distance_graph(
+        fifo_result,
+        deferred_result,
+        folder_path,
+        selected_task_ids=(
+            selected_task_ids
+        ),
+        difference_overview=(
+            difference_overview
+        ),
+        view_label=task_view_label,
+    )
+
+    return task_folder
 
 
 def _render_charts(
-    comparison: pd.DataFrame,
-    all_tasks: pd.DataFrame,
-    all_robots: pd.DataFrame,
-    all_queues: pd.DataFrame,
-    scenario: dict,
+    scenario_key: str,
+    fifo_result: dict,
+    deferred_result: dict,
 ) -> None:
-    left, middle, right = st.columns(
-        [1.15, 1.15, 1]
+    st.markdown(
+        '<div class="section-title">'
+        'Performance Analysis'
+        '</div>',
+        unsafe_allow_html=True,
     )
 
-    with left:
-        st.markdown(
-            '<div class="section-title">'
-            'Core metric comparison'
-            '</div>',
-            unsafe_allow_html=True,
-        )
+    unique_task_ids = sorted(
+        task.task_id
+        for task in fifo_result["tasks"]
+    )
 
-        plot_frame = comparison[
-            comparison["Metric"].isin(
-                [
-                    "Average Waiting Time",
-                    "Average Completion Time",
-                    "Makespan",
-                    "Average Queue Length",
+    task_count = len(
+        unique_task_ids
+    )
+
+    # -----------------------------------------------------
+    # Task graph selector
+    # -----------------------------------------------------
+    task_view_options = [
+        "All tasks"
+    ]
+
+    task_view_mapping: dict[
+        str,
+        list[str] | None,
+    ] = {
+        "All tasks": None
+    }
+
+    range_size = 25
+
+    if task_count > range_size:
+        for start_index in range(
+            0,
+            task_count,
+            range_size,
+        ):
+            end_index = min(
+                start_index + range_size,
+                task_count,
+            )
+
+            selected_ids = (
+                unique_task_ids[
+                    start_index:end_index
                 ]
             )
-        ].melt(
-            id_vars="Metric",
-            value_vars=[
-                "FIFO",
-                "Deferred Commitment",
-            ],
-            var_name="Strategy",
-            value_name="Value",
-        )
 
-        figure = px.bar(
-            plot_frame,
-            x="Metric",
-            y="Value",
-            color="Strategy",
-            barmode="group",
-            text_auto=".2f",
-            color_discrete_sequence=(
-                PLOTLY_COLORS
+            range_label = (
+                f"Tasks "
+                f"{start_index + 1}-"
+                f"{end_index}"
+            )
+
+            task_view_options.append(
+                range_label
+            )
+
+            task_view_mapping[
+                range_label
+            ] = selected_ids
+
+    if task_count > range_size:
+        selected_task_view = st.selectbox(
+            "Task graph view",
+            task_view_options,
+            index=0,
+            key=(
+                "task_graph_view_"
+                f"{scenario_key}"
+            ),
+            help=(
+                "Use All tasks for an overall "
+                "comparison. Select a 25-task "
+                "range for detailed FIFO and "
+                "Deferred values."
             ),
         )
-
-        figure.update_layout(
-            xaxis_title="",
-            yaxis_title="Value",
+    else:
+        selected_task_view = (
+            "All tasks"
         )
 
-        st.plotly_chart(
-            style_figure(figure, 350),
-            use_container_width=True,
-        )
-
-    with middle:
-        st.markdown(
-            '<div class="section-title">'
-            'Queue length over time'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        figure = px.line(
-            all_queues,
-            x="time",
-            y="queue_length",
-            color="Strategy",
-            color_discrete_sequence=(
-                PLOTLY_COLORS
-            ),
-        )
-
-        figure.update_layout(
-            xaxis_title="Simulation time",
-            yaxis_title="Pending tasks",
-        )
-
-        st.plotly_chart(
-            style_figure(figure, 350),
-            use_container_width=True,
-        )
-
-    with right:
-        st.markdown(
-            '<div class="section-title">'
-            'Completed tasks by robot'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        figure = px.bar(
-            all_robots,
-            x="Robot",
-            y="Completed Tasks",
-            color="Strategy",
-            barmode="group",
-            text_auto=True,
-            color_discrete_sequence=(
-                PLOTLY_COLORS
-            ),
-        )
-
-        figure.update_layout(
-            yaxis={
-                "dtick": 1,
-                "title": "Completed tasks",
-            }
-        )
-
-        st.plotly_chart(
-            style_figure(figure, 350),
-            use_container_width=True,
-        )
-
-    left, middle, right = st.columns(
-        [1.1, 1.1, 1]
+    selected_task_ids = (
+        task_view_mapping[
+            selected_task_view
+        ]
     )
 
+    difference_overview = (
+        selected_task_view
+        == "All tasks"
+        and task_count > 50
+    )
+
+    if difference_overview:
+        st.info(
+            "How to read the All tasks view: "
+            "each point is Deferred Commitment minus FIFO. "
+            "A negative value means Deferred Commitment "
+            "achieved the lower metric value; a positive "
+            "value means FIFO achieved the lower value; "
+            "zero means both strategies were equal. "
+            "The graph also shows how many tasks favour "
+            "each strategy. Choose a 25-task range for "
+            "side-by-side FIFO and Deferred values."
+        )
+    elif (
+        selected_task_ids is not None
+    ):
+        st.caption(
+            f"Detailed task graph view: "
+            f"{selected_task_view}. "
+            "FIFO and Deferred Commitment are "
+            "shown side-by-side."
+        )
+    elif task_count > 25:
+        st.caption(
+            f"{task_count} tasks are shown. "
+            "Numeric bar labels are hidden when "
+            "necessary to preserve readability."
+        )
+
+    # -----------------------------------------------------
+    # Generate cached graph groups
+    # -----------------------------------------------------
+    with st.spinner(
+        "Preparing performance graphs..."
+    ):
+        base_graph_folder = (
+            generate_graph_files(
+                scenario_key,
+                fifo_result,
+                deferred_result,
+            )
+        )
+
+        task_graph_folder = (
+            generate_task_graph_files(
+                scenario_key=(
+                    scenario_key
+                ),
+                fifo_result=(
+                    fifo_result
+                ),
+                deferred_result=(
+                    deferred_result
+                ),
+                selected_task_ids=(
+                    selected_task_ids
+                ),
+                task_view_label=(
+                    selected_task_view
+                ),
+                difference_overview=(
+                    difference_overview
+                ),
+            )
+        )
+
+    def render_graph(
+        title: str,
+        filename: str,
+        folder: Path,
+    ) -> None:
+        st.markdown(
+            f"###### {title}"
+        )
+
+        graph_path = (
+            folder
+            / filename
+        )
+
+        if graph_path.exists():
+            st.image(
+                str(graph_path),
+                use_container_width=True,
+            )
+        else:
+            st.warning(
+                f"{filename} was not generated."
+            )
+
+    # -----------------------------------------------------
+    # Aggregated metrics
+    # -----------------------------------------------------
+    left, right = st.columns(2)
+
     with left:
-        st.markdown(
-            '<div class="section-title">'
-            'Task waiting-time distribution'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        figure = px.box(
-            all_tasks,
-            x="Strategy",
-            y="Waiting Time",
-            points="all",
-            color="Strategy",
-            color_discrete_sequence=(
-                PLOTLY_COLORS
-            ),
-        )
-
-        figure.update_layout(
-            showlegend=False,
-            xaxis_title="",
-            yaxis_title="Waiting time",
-        )
-
-        st.plotly_chart(
-            style_figure(figure, 330),
-            use_container_width=True,
-        )
-
-    with middle:
-        st.markdown(
-            '<div class="section-title">'
-            'Robot utilization'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        figure = px.bar(
-            all_robots,
-            x="Robot",
-            y="Utilization (%)",
-            color="Strategy",
-            barmode="group",
-            text_auto=".1f",
-            color_discrete_sequence=(
-                PLOTLY_COLORS
-            ),
-        )
-
-        figure.update_layout(
-            yaxis_title="Utilization (%)",
-        )
-
-        st.plotly_chart(
-            style_figure(figure, 330),
-            use_container_width=True,
+        render_graph(
+            "Core Metrics Comparison",
+            "core_metrics_comparison.png",
+            base_graph_folder,
         )
 
     with right:
-        st.markdown(
-            '<div class="section-title">'
-            'Task mix'
-            '</div>',
-            unsafe_allow_html=True,
+        render_graph(
+            "Queue Length Over Time",
+            "queue_length_over_time.png",
+            base_graph_folder,
         )
 
-        task_mix = (
-            pd.DataFrame(scenario["tasks"])[
-                "task_type"
-            ]
-            .value_counts()
-            .rename_axis("Task Type")
-            .reset_index(name="Tasks")
+    # -----------------------------------------------------
+    # Task-level metrics
+    # -----------------------------------------------------
+    render_graph(
+        "Task Waiting Time",
+        "task_waiting_time.png",
+        task_graph_folder,
+    )
+
+    render_graph(
+        "Task Completion Time",
+        "task_completion_time.png",
+        task_graph_folder,
+    )
+
+    render_graph(
+        "Task Travel Distance",
+        "task_travel_distance.png",
+        task_graph_folder,
+    )
+
+    # -----------------------------------------------------
+    # Robot metrics
+    # -----------------------------------------------------
+    left, right = st.columns(2)
+
+    with left:
+        render_graph(
+            "Robot Total Distance",
+            "robot_total_distance.png",
+            base_graph_folder,
         )
 
-        figure = go.Figure(
-            data=[
-                go.Pie(
-                    labels=(
-                        task_mix["Task Type"]
-                        .str.title()
-                    ),
-                    values=task_mix["Tasks"],
-                    hole=0.58,
-                    marker={
-                        "colors": PLOTLY_COLORS,
-                    },
-                )
-            ]
+    with right:
+        render_graph(
+            "Robot Utilization",
+            "robot_utilization.png",
+            base_graph_folder,
         )
 
-        figure.update_layout(
-            showlegend=True,
-        )
-
-        st.plotly_chart(
-            style_figure(figure, 330),
-            use_container_width=True,
-        )
+    render_graph(
+        "Overall Strategy Performance",
+        "overall_strategy_performance.png",
+        base_graph_folder,
+    )
 
 
 def _render_tables(
@@ -821,6 +1175,71 @@ def _render_tables(
                 strategy_filter
             )
         ]
+
+        unique_task_ids = sorted(
+            filtered_tasks[
+                "Task ID"
+            ].unique()
+        )
+
+        if len(unique_task_ids) > 25:
+            range_size = 25
+
+            range_options = [
+                "All tasks"
+            ]
+
+            range_mapping = {}
+
+            for start in range(
+                0,
+                len(unique_task_ids),
+                range_size,
+            ):
+                end = min(
+                    start + range_size,
+                    len(unique_task_ids),
+                )
+
+                label = (
+                    f"Tasks {start + 1}-{end}"
+                )
+
+                selected_ids = (
+                    unique_task_ids[
+                        start:end
+                    ]
+                )
+
+                range_options.append(
+                    label
+                )
+
+                range_mapping[label] = (
+                    selected_ids
+                )
+
+            selected_range = st.selectbox(
+                "Task range",
+                range_options,
+                key="task_detail_range",
+            )
+
+            if (
+                selected_range
+                != "All tasks"
+            ):
+                filtered_tasks = (
+                    filtered_tasks[
+                        filtered_tasks[
+                            "Task ID"
+                        ].isin(
+                            range_mapping[
+                                selected_range
+                            ]
+                        )
+                    ]
+                )
 
         st.dataframe(
             filtered_tasks.round(2),
@@ -913,10 +1332,24 @@ def run_and_render_dashboard(
             unsafe_allow_html=True,
         )
 
+        preview_frame = pd.DataFrame(
+            scenario["tasks"]
+        )
+
+        # Display rack positions as integers only
+        preview_frame["rack_position"] = (
+            preview_frame["rack_position"]
+            .apply(
+                lambda position: (
+                    int(round(position[0])),
+                    int(round(position[1])),
+                )
+            )
+        )
+
+
         st.dataframe(
-            pd.DataFrame(
-                scenario["tasks"]
-            ).head(20),
+            preview_frame,
             use_container_width=True,
             hide_index=True,
         )
@@ -952,7 +1385,8 @@ def run_and_render_dashboard(
             "The configuration is ready. "
             "Click **Run strategy comparison** "
             "to display the performance snapshot, "
-            "animations, graphs, tables, and exports."
+            "graphs, tables, and exports. Animations "
+            "can then be generated on demand."
         )
         st.stop()
 
@@ -999,48 +1433,46 @@ def run_and_render_dashboard(
         ignore_index=True,
     )
 
-    all_queues = pd.concat(
-        [
-            queue_frame(
-                fifo_result,
-                "FIFO",
-            ),
-            queue_frame(
-                deferred_result,
-                "Deferred Commitment",
-            ),
-        ],
-        ignore_index=True,
+
+    animation_tab, analysis_tab = st.tabs(
+        ["2D Animation", "Analysis"]
     )
 
-    _render_metrics(
-        fifo_summary,
-        deferred_summary,
-    )
+    with animation_tab:
+        _render_animations(
+            scenario_key,
+            fifo_result,
+            deferred_result,
+        )
 
-    _render_animations(
-        scenario_key,
-        fifo_result,
-        deferred_result,
-    )
+    with analysis_tab:
+        _render_metrics(
+            fifo_summary,
+            deferred_summary,
+        )
 
-    _render_charts(
-        comparison,
-        all_tasks,
-        all_robots,
-        all_queues,
-        scenario,
-    )
+        _render_charts(
+            scenario_key,
+            fifo_result,
+            deferred_result,
+        )
 
-    _render_tables(
-        comparison,
-        all_tasks,
-        all_robots,
-    )
+        st.markdown(
+            '<div class="section-title">'
+            'Detailed Results'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
-    _render_exports(
-        scenario_key,
-        comparison,
-        all_tasks,
-        all_robots,
-    )
+        _render_tables(
+            comparison,
+            all_tasks,
+            all_robots,
+        )
+
+        _render_exports(
+            scenario_key,
+            comparison,
+            all_tasks,
+            all_robots,
+        )
